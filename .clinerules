@@ -1,0 +1,25 @@
+# Cline / Roo Agent Rules — thermal-mesh-calculators
+
+## Project Type
+Python library (pure stdlib, no dependencies)
+
+## Must Read First
+- CLAUDE.md (full project context, architecture, physics background)
+- README.md (user-facing docs with quick start and results)
+
+## Hard Rules
+1. NEVER add external dependencies (no numpy, scipy, pandas). This is a portability requirement for CAE pre-processor environments.
+2. All temperatures in Kelvin internally. Use `_C` suffix keys in output dicts for Celsius convenience.
+3. All lengths in meters internally. Use `_mm` suffix keys in output dicts for millimeters.
+4. Return dicts from public methods (not dataclasses) — Python 3.6+ compat.
+5. Include physics explanation in module-level docstrings.
+
+## Test Command
+```
+python -m examples.automotive_examples
+```
+
+## File Organization
+- Calculator classes go in `thermal_mesh_calculators/`
+- Export new classes from `__init__.py`
+- Add example usage to `examples/automotive_examples.py`

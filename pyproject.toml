@@ -1,0 +1,82 @@
+[build-system]
+requires = ["setuptools>=77.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "thermal-mesh-calculators"
+dynamic = ["version"]
+description = "Physics-driven thermal mesh sizing calculators for automotive CAE — conduction, convection, radiation, transient, and heat-shield solvers."
+readme = "README.md"
+requires-python = ">=3.9"
+license = "Apache-2.0"
+license-files = ["LICENSE", "NOTICE"]
+authors = [{ name = "BootstrapAI-mgmt" }]
+maintainers = [{ name = "BootstrapAI-mgmt" }]
+keywords = [
+    "cae",
+    "mesh",
+    "meshing",
+    "thermal",
+    "heat-transfer",
+    "finite-element",
+    "automotive",
+    "conduction",
+    "convection",
+    "radiation",
+    "biot-number",
+    "boundary-layer",
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Science/Research",
+    "Intended Audience :: Manufacturing",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Scientific/Engineering :: Physics",
+    "Typing :: Typed",
+]
+
+# Intentionally empty and load-bearing. The calculators must run inside CAE
+# pre-processor embedded interpreters (HyperMesh, ANSA, …) which have limited
+# package availability, so the package is pure standard library. Verified by an
+# AST scan of every module: the only non-self top-level import is ``math``.
+# Do not add numpy/scipy — see CLAUDE.md "Design Decisions" #1.
+dependencies = []
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/BootstrapAI-mgmt/thermal-mesh-calculators"
+Repository = "https://github.com/BootstrapAI-mgmt/thermal-mesh-calculators"
+Issues = "https://github.com/BootstrapAI-mgmt/thermal-mesh-calculators/issues"
+Changelog = "https://github.com/BootstrapAI-mgmt/thermal-mesh-calculators/blob/main/CHANGELOG.md"
+
+# Single source of truth for the version: ``thermal_mesh_calculators.__version__``.
+# setuptools reads it statically (it is a plain string literal), so no import of
+# the package is required at build time and the value can never drift from the
+# shipped module.
+[tool.setuptools.dynamic]
+version = { attr = "thermal_mesh_calculators.__version__" }
+
+[tool.setuptools.package-data]
+# PEP 561 marker, so type checkers honour the inline annotations in installed
+# copies. Backs the "Typing :: Typed" classifier above.
+thermal_mesh_calculators = ["py.typed"]
+
+[tool.setuptools.packages.find]
+# Ship only the library. ``tests``, ``examples``, ``analysis`` and ``docs`` are
+# repository assets, not distribution contents.
+include = ["thermal_mesh_calculators*"]
+namespaces = false
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

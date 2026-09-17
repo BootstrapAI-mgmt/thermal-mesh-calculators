@@ -1,0 +1,144 @@
+# Open/closed map — thermal-mesh-calculators (tmc)
+#
+# Every tracked file in this repo resolves to exactly one bucket, and every entry
+# names the rule that put it there.
+# Enforced by scripts/check_open_closed_map.py (exits non-zero on any uncovered file).
+#
+# Resolution is longest-prefix wins, directory-boundary aware.
+#
+# The whole library is open: the mesh-sizing formulas are published under Apache-2.0.
+
+schema_version: 1
+repo: thermal-mesh-calculators
+derived_from:
+  document: "maintainer open/closed policy (not public)"
+  section: "open/closed line"
+  commit: "n/a"
+generated_at: "2026-09-12"
+generated_by: "maintainer tooling"
+
+# This repo carries ZERO closed paths. An entry matching no tracked file is a checker
+# error by design (the reverse falsifier), so the map cannot describe deleted files.
+
+# counts describe the MAP (entries per bucket), not the tree.
+counts:
+  open: 10
+  closed: 0
+  neutral: 12
+  total: 22
+
+rules:
+  - id: R1
+    text: "Component identity — a path implementing an open component takes the open bucket."
+  - id: R2
+    text: "Tests follow their subject — a test encodes the logic it tests, so it takes the bucket of the module under test."
+  - id: R3
+    text: "Docs follow their subject — documentation of an open component is open; of a closed component, closed."
+  - id: R4
+    text: "Build/CI/packaging/editor config that contains no component logic is neutral. Neutral files travel with the repo they configure; neutral never means 'delete' or 'do not publish'."
+  - id: R5
+    text: "Third-party content (verbatim quoted text, licensed datasets, vendored snippets) is never extracted, whatever its bucket."
+  - id: R6
+    text: "Strategy documents are closed."
+  - id: R7
+    text: "Governance metadata about the line itself (this map, its checker) is neutral — it describes the split, it is not on either side of it."
+
+entries:
+  # ---- the library ---------------------------------------------------------------
+  - path: thermal_mesh_calculators
+    bucket: open
+    basis: "OPEN: the mesh-sizing library (R1)"
+    extract_to: null
+    notes: "The whole package. zones.py's CONVECTION_ZONES is an open shared vocabulary."
+  - path: tests
+    bucket: open
+    basis: "OPEN: the mesh-sizing library (R2: tests follow their subject)"
+    extract_to: null
+  - path: examples
+    bucket: open
+    basis: "OPEN: the mesh-sizing library — worked examples of the open library (R3)"
+    extract_to: null
+  - path: analysis
+    bucket: open
+    basis: "OPEN: the mesh-sizing library — parametric studies demonstrating the library (R3)"
+    extract_to: null
+    notes: "Regime-crossover and scenario studies that *call* the calculators."
+  - path: docs/api_reference.md
+    bucket: open
+    basis: "OPEN: the mesh-sizing library (R3)"
+    extract_to: null
+  - path: docs/math_derivations.md
+    bucket: open
+    basis: "OPEN: the mesh-sizing library (R3)"
+    extract_to: null
+    notes: "Verified third-party-clean: no DOI/arXiv citation or quoted published text anywhere in this repo."
+  - path: docs/quick_reference.md
+    bucket: open
+    basis: "OPEN: the mesh-sizing library (R3)"
+    extract_to: null
+  - path: README.md
+    bucket: open
+    basis: "OPEN: the mesh-sizing library (R3)"
+    extract_to: null
+  - path: CLAUDE.md
+    bucket: open
+    basis: "OPEN: the mesh-sizing library — agent-context doc for the open library (R3)"
+    extract_to: null
+  - path: CHANGELOG.md
+    bucket: open
+    basis: "OPEN: the mesh-sizing library — release history of the open library (R3)"
+    extract_to: null
+    notes: "Records only library releases. The sdist ships it; the wheel does not."
+
+  # ---- build / config ------------------------------------------------------------
+  - path: Makefile
+    bucket: neutral
+    basis: "R4 — build tooling, carries no component IP"
+    extract_to: null
+  - path: requirements.txt
+    bucket: neutral
+    basis: "R4 — dependency manifest, carries no component IP"
+    extract_to: null
+  - path: .gitignore
+    bucket: neutral
+    basis: "R4 — VCS config, carries no component IP"
+    extract_to: null
+  - path: .clinerules
+    bucket: neutral
+    basis: "R4 — editor/agent tooling config, carries no component IP"
+    extract_to: null
+  - path: .github
+    bucket: neutral
+    basis: "R4 — CI and agent-tooling configuration, carries no component IP"
+    extract_to: null
+  - path: pyproject.toml
+    bucket: neutral
+    basis: "R4 — packaging manifest, carries no component IP"
+    extract_to: null
+  - path: MANIFEST.in
+    bucket: neutral
+    basis: "R4 — sdist manifest, carries no component IP"
+    extract_to: null
+  - path: LICENSE
+    bucket: neutral
+    basis: "R4 — licence instrument, not a component; travels with whatever it licenses"
+    extract_to: null
+  - path: NOTICE
+    bucket: neutral
+    basis: "R4 — licence instrument (Apache-2.0 attribution notice), not a component"
+    extract_to: null
+    notes: "Same class as LICENSE."
+
+  # ---- governance metadata about the line itself -----------------------------------
+  - path: OPEN-CLOSED-MAP.yaml
+    bucket: neutral
+    basis: "R7 — this map describes the split; it is not on either side of it"
+    extract_to: null
+  - path: scripts/check_open_closed_map.py
+    bucket: neutral
+    basis: "R7 — the map's falsifier; governance metadata, no component IP"
+    extract_to: null
+  - path: tests/test_open_closed_map.py
+    bucket: neutral
+    basis: "R7 — tests the map's falsifier, not the library; overrides the open `tests` entry"
+    extract_to: null

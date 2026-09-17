@@ -1,0 +1,28 @@
+# Source-distribution contents.
+#
+# setuptools already picks up the readme (via ``project.readme``) and the
+# licence files (via ``project.license-files``); the entries below make the
+# sdist self-describing and reproducible.
+
+include LICENSE
+include NOTICE
+include README.md
+include CHANGELOG.md
+include pyproject.toml
+
+# PEP 561 marker — ships inside the wheel too (see tool.setuptools.package-data).
+include thermal_mesh_calculators/py.typed
+
+# Tests ship in the sdist so downstream packagers can verify a build.
+recursive-include tests *.py
+# The open/closed-map test needs scripts/ and the map, which do not ship in the sdist;
+# without this exclusion collection aborts and a packager sees no test signal at all.
+exclude tests/test_open_closed_map.py
+
+# Never ship build/editor droppings.
+global-exclude __pycache__
+global-exclude *.py[cod]
+global-exclude *.so
+global-exclude .DS_Store
+prune .github
+prune .agent-scratch
