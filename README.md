@@ -1,5 +1,7 @@
 # thermal-mesh-calculators
 
+[![CI](https://github.com/BootstrapAI-mgmt/thermal-mesh-calculators/actions/workflows/ci.yml/badge.svg)](https://github.com/BootstrapAI-mgmt/thermal-mesh-calculators/actions/workflows/ci.yml)
+
 Physics-driven thermal mesh sizing calculators for automotive CAE — conduction, convection, radiation, and heat shield solvers.
 
 ## Motivation
