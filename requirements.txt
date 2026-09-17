@@ -1,0 +1,4 @@
+# No external dependencies — pure Python standard library only.
+# This is intentional: the calculators are designed to run inside
+# CAE pre-processor embedded Python environments (HyperMesh, ANSA, etc.)
+# which often have limited package availability.
