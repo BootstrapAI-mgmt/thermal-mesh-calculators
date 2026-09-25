@@ -28,18 +28,35 @@ External h cap:
 
 Air properties:
     Evaluated at the film temperature T_film = (T_surf + T_fluid) / 2.
-    Uses polynomial fits valid from 250–700 K (covers automotive range).
-    Pure Python, no dependencies.
+    Uses polynomial fits valid from 250–700 K (AIR_PROPERTY_RANGE_K).
+    Outside that range the properties are those at the nearer end of it;
+    air_properties() says so (in_range False) and estimate_h() reports
+    film_in_range.  Pure Python, no dependencies.
 
 Units:  SI throughout (m, s, K, W).
 """
 
 import math
+from thermal_mesh_calculators._guards import (
+    require_non_negative,
+    require_positive,
+    require_temperatures,
+)
 
 
 # ---------------------------------------------------------------------------
 #  Air properties at film temperature (polynomial fits, 250–700 K)
 # ---------------------------------------------------------------------------
+
+# The film temperatures (K) the air-property fits below are valid over.
+AIR_PROPERTY_RANGE_K = (250.0, 700.0)
+
+
+def film_in_range(t_film: float) -> bool:
+    """True when t_film (K) lies within AIR_PROPERTY_RANGE_K."""
+    low, high = AIR_PROPERTY_RANGE_K
+    return low <= t_film <= high
+
 
 def air_properties(t_film: float) -> dict:
     """
@@ -57,8 +74,17 @@ def air_properties(t_film: float) -> dict:
         Pr     : float — Prandtl number
         beta   : float — volumetric expansion coefficient (1/K)
         rho    : float — density (kg/m^3)
+        t_film_K : float — the film temperature given (K)
+        t_eval_K : float — the temperature the fits were evaluated at: the
+                           film temperature clamped to AIR_PROPERTY_RANGE_K
+        in_range : bool  — False when the properties are extrapolated
+                           (t_eval_K differs from t_film_K)
+
+    Raises ValueError for t_film not > 0.
     """
-    T = max(250.0, min(700.0, t_film))
+    require_positive("t_film", t_film, "K")
+    low, high = AIR_PROPERTY_RANGE_K
+    T = max(low, min(high, t_film))
 
     # Thermal conductivity (W/m K) — linear fit
     k_air = 0.0241 + 7.0e-5 * (T - 300.0)
@@ -81,6 +107,9 @@ def air_properties(t_film: float) -> dict:
         "Pr": Pr,
         "beta": beta,
         "rho": rho,
+        "t_film_K": t_film,
+        "t_eval_K": T,
+        "in_range": film_in_range(t_film),
     }
 
 
@@ -265,6 +294,9 @@ def forced_convection_flat_plate(
         Nu      : float — Nusselt number
         regime  : str   — "laminar" or "turbulent"
     """
+    require_temperatures(t_surf=t_surf, t_fluid=t_fluid)
+    require_non_negative("velocity", velocity, "m/s")
+    require_positive("char_length", char_length, "m")
     t_film = (t_surf + t_fluid) / 2.0
     props = air_properties(t_film)
 
@@ -334,6 +366,8 @@ def natural_convection(
         Nu      : float — Nusselt number
         regime  : str   — "laminar" or "turbulent"
     """
+    require_temperatures(t_surf=t_surf, t_fluid=t_fluid)
+    require_positive("char_length", char_length, "m")
     dt = abs(t_surf - t_fluid)
     if dt < 0.01:
         return {
@@ -420,6 +454,9 @@ def richardson_number(
         Re      : float — Reynolds number
         regime  : str   — "forced", "natural", or "mixed"
     """
+    require_temperatures(t_surf=t_surf, t_fluid=t_fluid)
+    require_non_negative("velocity", velocity, "m/s")
+    require_positive("char_length", char_length, "m")
     dt = abs(t_surf - t_fluid)
     t_film = (t_surf + t_fluid) / 2.0
     props = air_properties(t_film)
@@ -492,7 +529,19 @@ def estimate_h(
         regime          : str   — "forced", "natural", or "mixed"
         Ri              : float — Richardson number
         dominant_mode   : str   — description of what's driving h
+        t_film_K        : float — film temperature (K) the air properties
+                                  were wanted at
+        film_in_range   : bool  — False when that lies outside
+                                  AIR_PROPERTY_RANGE_K, so h rests on
+                                  extrapolated (clamped) air properties
+
+    Raises ValueError for a temperature or char_length not > 0, or a
+    negative velocity.
     """
+    require_temperatures(t_surf=t_surf, t_fluid=t_fluid)
+    require_non_negative("velocity", velocity, "m/s")
+    require_positive("char_length", char_length, "m")
+    t_film = (t_surf + t_fluid) / 2.0
     nat = natural_convection(
         t_surf, t_fluid, char_length, orientation, cap=999.0,
     )
@@ -517,6 +566,8 @@ def estimate_h(
             "Re": 0.0,
             "dominant_mode": f"natural convection ({orientation})",
             "solver_advisory": adv,
+            "t_film_K": t_film,
+            "film_in_range": film_in_range(t_film),
         }
 
     frc = forced_convection_flat_plate(
@@ -549,7 +600,6 @@ def estimate_h(
         is_opposing = (orientation == "horizontal_down")
 
         if is_opposing:
-            t_film = (t_surf + t_fluid) / 2.0
             props = air_properties(t_film)
             h_conduction_min = props["k_air"] / char_length
             h_raw = max(
@@ -581,6 +631,8 @@ def estimate_h(
         "Re": frc["Re"],
         "dominant_mode": dominant,
         "solver_advisory": adv,
+        "t_film_K": t_film,
+        "film_in_range": film_in_range(t_film),
     }
 
 

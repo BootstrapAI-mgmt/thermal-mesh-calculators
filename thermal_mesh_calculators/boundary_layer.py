@@ -105,6 +105,7 @@ Units:  SI throughout (m, s, K, W).  Output sizes in mm.
 
 import math
 from thermal_mesh_calculators.h_estimator import air_properties
+from thermal_mesh_calculators._guards import require_non_negative, require_positive
 
 
 # ---------------------------------------------------------------------------
@@ -306,7 +307,15 @@ class BoundaryLayerCalculator:
             bl_regime          : str   — "laminar" or "turbulent"
             y_plus_target      : float — echoed back
             growth_ratio       : float — echoed back
+            t_film_K           : float — film temperature for air properties
+            film_in_range      : bool  — False when the air properties are
+                                         extrapolated (see h_estimator)
+
+        Raises ValueError for t_fluid not > 0 or t_surf < 0 (0 means "not
+        given").
         """
+        require_positive("t_fluid", t_fluid, "K")
+        require_non_negative("t_surf", t_surf, "K")
         # --- Resolve effective velocity and film temperature -----------
         if t_surf > 0:
             t_film = (t_surf + t_fluid) / 2.0
@@ -485,4 +494,6 @@ class BoundaryLayerCalculator:
             "bl_regime": bl_regime,
             "y_plus_target": y_plus_target,
             "growth_ratio": growth_ratio,
+            "t_film_K": t_film,
+            "film_in_range": props["in_range"],
         }

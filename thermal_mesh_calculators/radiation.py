@@ -38,6 +38,11 @@ Emissivity boundaries:
 
 import math
 from thermal_mesh_calculators.constants import STEFAN_BOLTZMANN
+from thermal_mesh_calculators._guards import (
+    require_fraction,
+    require_non_negative,
+    require_positive,
+)
 
 
 class RadiationMeshCalculator:
@@ -60,7 +65,11 @@ class RadiationMeshCalculator:
         Returns
         -------
         float — dq/dT (W/m^2 K)
+
+        Raises ValueError for t_local not > 0 or emissivity outside [0, 1].
         """
+        require_positive("t_local", t_local, "K")
+        require_fraction("emissivity", emissivity)
         return 4.0 * emissivity * STEFAN_BOLTZMANN * (t_local ** 3)
 
     @staticmethod
@@ -99,7 +108,17 @@ class RadiationMeshCalculator:
             max_dx_mm       : float — maximum element size (mm)
             dq_dt           : float — flux sensitivity (W/m^2 K)
             max_dt_element  : float — max delta-T across element (K)
+
+        Raises
+        ------
+        ValueError
+            t_local or allowable_flux_error not > 0, emissivity outside
+            [0, 1], or spatial_gradient < 0.
         """
+        require_positive("t_local", t_local, "K")
+        require_fraction("emissivity", emissivity)
+        require_positive("allowable_flux_error", allowable_flux_error, "W/m^2")
+        require_non_negative("spatial_gradient", spatial_gradient, "K/m")
         if spatial_gradient == 0:
             return {
                 "max_dx_mm": float("inf"),

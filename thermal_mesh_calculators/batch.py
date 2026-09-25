@@ -10,29 +10,63 @@ of parts from a BOM or component spreadsheet.
 
 Minimum per-part input (6 fields):
     part_id           — unique identifier (string)
-    material          — material name (key into material database)
-    component_class   — one of: "exhaust", "structural", "shield",
-                        "multilayer_shield"
+    material          — material name (key into MATERIALS)
+    component_class   — one of: "exhaust", "exhaust_adjacent", "structural",
+                        "shield", "multilayer_shield" (the keys of
+                        CLASS_DEFAULTS)
     convection_zone   — key into CONVECTION_ZONES (zones.py)
     thickness_mm      — wall thickness in mm
     t_surf_K          — surface temperature estimate in Kelvin
                         (ignored for shield classes — solved iteratively)
 
+Surface treatment (key into SURFACE_TREATMENTS), or an emissivity directly:
+    surface / epsilon            — non-shield classes
+    surface_in / eps_in          — shields, exhaust-facing side
+    surface_out / eps_out        — shields, ambient-facing side
+    surface_g1 / eps_g1,
+    surface_g2 / eps_g2          — two-layer shields, the two gap faces
+    A surface given neither falls back to a material-class emissivity and
+    is reported as a SURFACE_DEFAULTED warning.
+
+Every name is checked before anything is computed: an unknown or missing
+material or component class, an unknown convection zone and an unknown
+surface treatment raise PartInputError, whose message names the part, the
+key and the allowed set.
+
 Optional per-part overrides:
     h_override        — use specific h instead of zone lookup (W/m^2 K)
     h_in_override     — shield inner h override
     h_out_override    — shield outer h override
-    eps_in            — exhaust-facing emissivity (shields)
-    eps_out           — ambient-facing emissivity (shields)
-    t_exh_K           — exhaust source temperature (shields)
+    t_exh_K           — exhaust source temperature (shields; else the
+                        project's; else 1073.15 K)
+    h_gap             — two-layer shields: gap conductance (default 15)
+    f12               — two-layer shields: view factor between the gap
+                        faces (default 1.0, parallel plates)
+    A shield input that falls back to its default (t_exh_K, h_gap, f12) is
+    reported as a SHIELD_INPUT_DEFAULTED warning naming the key.
+    t_fluid_K         — this part's fluid temperature, e.g. exhaust gas
+                        inside a pipe (overrides the project's)
+    shield_max_iter   — iteration limit of the shield solve (part or
+                        project; solver default 50 single-layer, 100
+                        two-layer).  A solve that stops unconverged is
+                        reported as a SHIELD_NOT_CONVERGED warning.
 
 Project-level defaults (set once, applied to all parts):
-    t_fluid_K         — ambient / underhood air temperature
+    t_fluid_K         — ambient / underhood air temperature.  A part's
+                        fluid temperature (its own t_fluid_K, else this)
+                        is the one temperature both h and q'' are
+                        computed from.
     t_surr_K          — radiation sink temperature
     max_dt            — accuracy target (K per element)
     dt                — solver time-step (s) for transient
     fo_max            — Fourier number limit
     tau_bc            — drive-cycle segment duration (s)
+    transient_scheme  — "explicit" or "implicit" (default: inferred from
+                        fo_max; see TransientMeshCalculator.resolve_scheme).
+                        When the smallest element dt allows exceeds the
+                        governing size, the result carries a
+                        TRANSIENT_CONFLICT warning with a remedy that
+                        closes it.
     allowable_flux_error — radiation flux error tolerance (W/m^2)
 """
 
@@ -43,18 +77,45 @@ from thermal_mesh_calculators.shields import (
     SingleLayerShieldCalculator,
     MultilayerShieldCalculator,
 )
-from thermal_mesh_calculators.transient import TransientMeshCalculator
+from thermal_mesh_calculators.transient import (
+    TransientMeshCalculator,
+    _bound_text,
+)
 from thermal_mesh_calculators.zones import (
+    CONVECTION_ZONES,
     get_zone,
     get_conservative_h,
-    get_zone_air_temp,
     estimate_spatial_gradient,
 )
 from thermal_mesh_calculators.h_estimator import (
     estimate_h,
+    AIR_PROPERTY_RANGE_K,
     H_EXTERNAL_MAX,
 )
 from thermal_mesh_calculators.boundary_layer import BoundaryLayerCalculator
+
+
+# ---------------------------------------------------------------------------
+#  Input errors
+# ---------------------------------------------------------------------------
+
+class PartInputError(KeyError, ValueError):
+    """
+    A part dict names something the library does not know.
+
+    Raised by process_part() before anything is computed: for a missing or
+    unknown material or component class, an unknown convection zone, a zone
+    the part needs but does not give, and an unknown surface treatment.
+    The message names the part, the key and the allowed set.
+
+    It subclasses KeyError, which these lookups raised before the check
+    existed (``except KeyError`` keeps working), and ValueError, which is
+    what it is: a bad value in an input dict.
+    """
+
+    def __str__(self) -> str:
+        # KeyError.__str__ shows repr() of the message; show the message.
+        return str(self.args[0]) if self.args else ""
 
 
 # ---------------------------------------------------------------------------
@@ -457,51 +518,89 @@ def list_surface_treatments() -> list:
     return sorted(SURFACE_TREATMENTS.keys())
 
 
-def _resolve_epsilon(part: dict, mat: dict, key: str = "surface") -> float:
+# Surface keys, and the direct-emissivity key that overrides each one.
+_EPS_KEY_FOR_SURFACE = {
+    "surface": "epsilon",
+    "surface_in": "eps_in",
+    "surface_out": "eps_out",
+    "surface_g1": "eps_g1",
+    "surface_g2": "eps_g2",
+}
+
+
+def _fallback_epsilon(mat_name: str) -> tuple:
     """
-    Resolve emissivity for a part surface.
+    Material-class emissivity for a surface given no treatment and no eps.
+
+    Returns (epsilon, rule):
+        Non-metals (plastic, rubber, composite, ceramic, glass): 0.90
+        Aluminium (any alloy, any form):                         0.30
+        All other metals (steel, cast iron, ...):                0.73
+    """
+    if any(tag in mat_name for tag in ("plastic", "rubber", "composite",
+                                       "ceramic", "glass")):
+        return 0.90, "non-metal"
+    if "aluminium" in mat_name or "aluminum" in mat_name:
+        return 0.30, "aluminium"
+    return 0.73, "metal"
+
+
+def _resolve_epsilon_with_source(part: dict, key: str = "surface") -> tuple:
+    """
+    Resolve emissivity for a part surface and say where it came from.
 
     Priority order:
-        1. Direct epsilon override in part dict (eps, eps_in, eps_out)
-        2. Surface treatment lookup (surface, surface_in, surface_out)
-        3. Material-level fallback for plastics/rubber (inferred from type)
-        4. KeyError if nothing resolves
+        1. Direct emissivity in the part dict (epsilon, eps_in, eps_out,
+           eps_g1, eps_g2)                       -> source "override"
+        2. Surface treatment lookup (surface, surface_in, surface_out,
+           surface_g1, surface_g2)               -> source "treatment"
+        3. Material-class fallback (see _fallback_epsilon)
+                                                 -> source "<rule> fallback"
+
+    An unknown treatment name raises KeyError (get_surface_epsilon).
+
+    Returns
+    -------
+    (epsilon, source)
+    """
+    direct_key = _EPS_KEY_FOR_SURFACE.get(key, "epsilon")
+    if direct_key in part:
+        return part[direct_key], "override"
+    if key in part:
+        return get_surface_epsilon(part[key]), "treatment"
+    eps, rule = _fallback_epsilon(part.get("material", ""))
+    return eps, rule + " fallback"
+
+
+def _resolve_epsilon(part: dict, mat: dict, key: str = "surface") -> float:
+    """
+    Resolve emissivity for a part surface (see _resolve_epsilon_with_source).
 
     Parameters
     ----------
     part : dict — part definition
-    mat : dict — material properties
+    mat : dict — material properties (unused; kept for compatibility)
     key : str — which surface: "surface", "surface_in", "surface_out",
                 "surface_g1", "surface_g2"
     """
-    # Direct override takes precedence
-    eps_key_map = {
-        "surface": "epsilon",
-        "surface_in": "eps_in",
-        "surface_out": "eps_out",
-        "surface_g1": "eps_g1",
-        "surface_g2": "eps_g2",
+    return _resolve_epsilon_with_source(part, key)[0]
+
+
+def _surface_default_warning(part: dict, key: str, eps: float,
+                             source: str) -> dict:
+    """The SURFACE_DEFAULTED warning for a surface resolved by fallback."""
+    eps_key = _EPS_KEY_FOR_SURFACE[key]
+    return {
+        "code": "SURFACE_DEFAULTED",
+        "severity": "caution",
+        "key": key,
+        "message": (
+            f"No surface treatment ('{key}') and no emissivity "
+            f"('{eps_key}') given; assumed eps = {eps:.2f}, the {source} "
+            f"for material '{part.get('material', '')}'. Set '{key}' to "
+            f"one of list_surface_treatments(), or give '{eps_key}'."
+        ),
     }
-    direct_key = eps_key_map.get(key, "epsilon")
-    if direct_key in part:
-        return part[direct_key]
-
-    # Surface treatment lookup
-    if key in part:
-        return get_surface_epsilon(part[key])
-
-    # Fallback: material-class rules
-    #   Non-metals (plastic, rubber, composite): eps = 0.90
-    #   Aluminium (any alloy, any form):         eps = 0.30
-    #   All other metals (steel, cast iron):      eps = 0.73
-    mat_name = part.get("material", "")
-    if any(tag in mat_name for tag in ("plastic", "rubber", "composite",
-                                       "ceramic", "glass")):
-        return 0.90
-    if "aluminium" in mat_name or "aluminum" in mat_name:
-        return 0.30
-    # All other metals
-    return 0.73
 
 
 # ---------------------------------------------------------------------------
@@ -518,7 +617,9 @@ def _estimate_h_from_zone(zone_name: str, t_surf: float, t_fluid: float,
     For dead zones (velocity == 0), uses natural convection correlations
     with the zone's orientation.
 
-    Falls back to static get_conservative_h() if the correlation fails.
+    Falls back to static get_conservative_h() if the correlation fails,
+    and records why in "fallback_reason" (process_part() reports it as an
+    H_CORRELATION_FALLBACK warning).
 
     Parameters
     ----------
@@ -535,6 +636,7 @@ def _estimate_h_from_zone(zone_name: str, t_surf: float, t_fluid: float,
         method     : str   — "correlation" or "static_lookup"
         regime     : str   — "forced", "natural", "mixed", or "static"
         details    : dict  — full estimate_h output (if correlation used)
+        fallback_reason : str — the correlation's error (static_lookup only)
     """
     zone = get_zone(zone_name)
     cap = 999.0 if (is_internal or zone.get("is_internal", False)) else H_EXTERNAL_MAX
@@ -554,7 +656,7 @@ def _estimate_h_from_zone(zone_name: str, t_surf: float, t_fluid: float,
             "regime": result["regime"],
             "details": result,
         }
-    except Exception:
+    except Exception as exc:
         # Fallback to static zone lookup if correlation fails
         h = get_conservative_h(zone_name)
         return {
@@ -562,6 +664,7 @@ def _estimate_h_from_zone(zone_name: str, t_surf: float, t_fluid: float,
             "method": "static_lookup",
             "regime": "static",
             "details": None,
+            "fallback_reason": f"{type(exc).__name__}: {exc}",
         }
 
 
@@ -712,7 +815,7 @@ def _generate_warnings(part: dict, result: dict, project: dict) -> list:
     # --- 5. Low forced velocity with high surface temp (buoyancy may matter) ---
     if cls not in ("shield", "multilayer_shield"):
         t_surf = part.get("t_surf_K", 300)
-        t_fluid = project.get("t_fluid_K", 300)
+        t_fluid = result.get("t_fluid_K", project.get("t_fluid_K", 300))
         dt_surf = t_surf - t_fluid
         try:
             zone = get_zone(zone_name)
@@ -734,6 +837,228 @@ def _generate_warnings(part: dict, result: dict, project: dict) -> list:
 
 
 # ---------------------------------------------------------------------------
+#  Input validation
+# ---------------------------------------------------------------------------
+
+_SHIELD_CLASSES = ("shield", "multilayer_shield")
+_ZONE_KEYS = ("convection_zone", "convection_zone_in", "convection_zone_out")
+
+
+def _known(value, names) -> bool:
+    """True when value is a string naming a key of names."""
+    return isinstance(value, str) and value in names
+
+
+def _part_input_error(what: str, part: dict, key: str, names,
+                      hint: str = "") -> PartInputError:
+    """PartInputError naming the part, the key and the allowed set."""
+    pid = part.get("part_id", "?")
+    if key in part:
+        head = f"Unknown {what} {part[key]!r} (part {pid!r}, key {key!r})."
+    else:
+        head = f"Missing {what}: part {pid!r} has no {key!r} key."
+    if hint:
+        head = head + " " + hint
+    return PartInputError(
+        f"{head} Available: {', '.join(sorted(names))}"
+    )
+
+
+def _validate_part(part: dict) -> None:
+    """
+    Check every name a part dict gives, before anything is computed.
+
+    Raises PartInputError for:
+        - a missing or unknown component_class (keys of CLASS_DEFAULTS);
+        - a missing or unknown material (keys of MATERIALS);
+        - any of convection_zone / convection_zone_in / convection_zone_out
+          naming a zone that is not in CONVECTION_ZONES;
+        - a zone the part needs but does not give: convection_zone for a
+          non-shield part without h_override; for a shield side, its
+          convection_zone_<side> or convection_zone, unless
+          h_<side>_override is given;
+        - any surface key (surface, surface_in, surface_out, surface_g1,
+          surface_g2) naming a treatment not in SURFACE_TREATMENTS.
+    """
+    if not _known(part.get("component_class"), CLASS_DEFAULTS):
+        raise _part_input_error("component class", part, "component_class",
+                                CLASS_DEFAULTS)
+    if not _known(part.get("material"), MATERIALS):
+        raise _part_input_error("material", part, "material", MATERIALS)
+
+    for key in _ZONE_KEYS:
+        if key in part and not _known(part[key], CONVECTION_ZONES):
+            raise _part_input_error("convection zone", part, key,
+                                    CONVECTION_ZONES)
+    if part["component_class"] in _SHIELD_CLASSES:
+        for side in ("in", "out"):
+            zone_key = "convection_zone_" + side
+            if (zone_key not in part and "convection_zone" not in part
+                    and "h_" + side + "_override" not in part):
+                raise _part_input_error(
+                    "convection zone", part, zone_key, CONVECTION_ZONES,
+                    hint=(f"Give '{zone_key}', 'convection_zone' or "
+                          f"'h_{side}_override'."),
+                )
+    elif "convection_zone" not in part and "h_override" not in part:
+        raise _part_input_error(
+            "convection zone", part, "convection_zone", CONVECTION_ZONES,
+            hint="Give 'convection_zone' or 'h_override'.",
+        )
+
+    for key in _EPS_KEY_FOR_SURFACE:
+        if key in part and not _known(part[key], SURFACE_TREATMENTS):
+            raise _part_input_error("surface treatment", part, key,
+                                    SURFACE_TREATMENTS)
+
+
+def _shield_solver_options(part: dict, project: dict) -> dict:
+    """
+    Keyword arguments for the shield solvers: max_iter from the part's
+    shield_max_iter, else the project's, else the solver's own default.
+    """
+    max_iter = part.get("shield_max_iter", project.get("shield_max_iter"))
+    if max_iter is None:
+        return {}
+    if isinstance(max_iter, bool) or not isinstance(max_iter, int) or max_iter < 1:
+        raise ValueError(
+            f"shield_max_iter must be an integer >= 1, got {max_iter!r} "
+            f"(part {part.get('part_id', '?')!r})"
+        )
+    return {"max_iter": max_iter}
+
+
+def _shield_not_converged_warning(shield_result: dict, layers: str) -> dict:
+    """SHIELD_NOT_CONVERGED: the shield solve stopped at its iteration limit."""
+    return {
+        "code": "SHIELD_NOT_CONVERGED",
+        "severity": "warning",
+        "message": (
+            f"The {layers} shield solve did not converge in "
+            f"{shield_result['iterations']} iterations (energy-balance "
+            f"residual {shield_result['residual_W_m2']:.3g} W/m^2). The "
+            f"shield temperature(s) and element size(s) are estimates from "
+            f"the last iterate. Raise 'shield_max_iter' or check the inputs."
+        ),
+    }
+
+
+def _transient_conflict_warning(trans: dict, governing_dx_mm: float,
+                                fo_max: float, dt: float):
+    """
+    TRANSIENT_CONFLICT, or None: the time step cannot integrate the
+    governing element.
+
+    Two conflicts are checked.  Fourier minimum above the governing size:
+    the minimum scales with sqrt(dt) and the governing size does not
+    shrink with dt, so dt <= Fo_max * dx_gov^2 / alpha closes it.  An
+    implicit window that is empty at every dt (C^2 * Fo_max < 1): only a
+    larger safety_factor or fo_max closes that, and it is reported first.
+    """
+    remedies = []
+    if trans["conflict"] is not None:
+        remedies = [r for r in trans["conflict"]["remedies"]
+                    if r["parameter"] != "dt"]
+    fo_min = trans["fourier_min_dx_mm"]
+    below_minimum = (governing_dx_mm < float("inf")
+                     and fo_min > governing_dx_mm * (1.0 + 1e-9))
+    if below_minimum:
+        dx_m = governing_dx_mm / 1000.0
+        remedies.append({
+            "parameter": "dt",
+            "max_value": fo_max * dx_m * dx_m / trans["alpha"],
+        })
+    if not remedies:
+        return None
+
+    explicit = trans["scheme"] == "explicit"
+    words = []
+    for r in remedies:
+        # Each bound is printed rounded toward the side that satisfies it, so
+        # the printed value closes the conflict; `remedies` keeps it exact.
+        if r["parameter"] == "dt":
+            words.append(
+                f"reduce dt to <= {_bound_text(r['max_value'], 'max')} s")
+        else:
+            words.append(f"raise safety_factor to >= "
+                         f"{_bound_text(r['min_value'], 'min')} "
+                         f"(no dt can close this: both bounds scale with "
+                         f"sqrt(dt))")
+    if below_minimum:
+        head = (
+            f"Transient ({trans['scheme']}, dt = {dt:g} s): the smallest "
+            f"element this time step allows, {fo_min:.4g} mm (Fo <= "
+            f"{fo_max:g}, {'stability' if explicit else 'accuracy'} limit), "
+            f"exceeds the governing size, {governing_dx_mm:.4g} mm."
+        )
+    else:
+        head = trans["conflict"]["message"].split(" Remedy:")[0]
+    return {
+        "code": "TRANSIENT_CONFLICT",
+        "severity": "warning" if explicit else "caution",
+        "message": head + " Remedy: " + "; then ".join(words) + ".",
+        "remedies": remedies,
+    }
+
+
+def _film_temperature_warning(entries: list) -> dict:
+    """
+    FILM_TEMP_OUT_OF_RANGE: an air-property fit was evaluated outside its
+    range.  entries is a list of (what, film temperature in K).
+    """
+    low, high = AIR_PROPERTY_RANGE_K
+    clauses = []
+    for what, t_film in entries:
+        t_eval = min(max(t_film, low), high)
+        clauses.append(f"{what} (film temperature {t_film:.0f} K) used air "
+                       f"properties evaluated at {t_eval:.0f} K")
+    return {
+        "code": "FILM_TEMP_OUT_OF_RANGE",
+        "severity": "caution",
+        "message": (
+            f"The air-property fits cover film temperatures of "
+            f"{low:.0f}-{high:.0f} K; " + "; ".join(clauses)
+            + ". Treat the result as extrapolated."
+        ),
+    }
+
+
+def _shield_input(part: dict, project: dict, key: str, default: float,
+                  input_warnings: list, what: str,
+                  project_key: bool = False) -> float:
+    """
+    A shield input from the part (or, when project_key, the project);
+    when neither gives it, the default, reported as SHIELD_INPUT_DEFAULTED.
+    """
+    if key in part:
+        return part[key]
+    if project_key and key in project:
+        return project[key]
+    input_warnings.append({
+        "code": "SHIELD_INPUT_DEFAULTED",
+        "severity": "caution",
+        "key": key,
+        "message": (
+            f"No '{key}' given ({what}); assumed {key} = {default:g}. "
+            f"Give '{key}' on the part"
+            + (" or the project." if project_key else ".")
+        ),
+    })
+    return default
+
+
+def _shield_side_h(part: dict) -> tuple:
+    """(h_in, h_out) for a shield: the overrides, else each side's zone."""
+    zone_in = part.get("convection_zone_in", part.get("convection_zone"))
+    zone_out = part.get("convection_zone_out", part.get("convection_zone"))
+    h_in = (part["h_in_override"] if "h_in_override" in part
+            else get_conservative_h(zone_in))
+    h_out = (part["h_out_override"] if "h_out_override" in part
+             else get_conservative_h(zone_out))
+    return h_in, h_out
+
+
+# ---------------------------------------------------------------------------
 #  Single-part processor
 # ---------------------------------------------------------------------------
 
@@ -746,18 +1071,32 @@ def process_part(part: dict, project: dict) -> dict:
     part : dict
         Per-part definition.  Required keys:
             part_id, material, component_class, convection_zone,
-            thickness_mm, t_surf_K, surface (surface treatment name)
+            thickness_mm, t_surf_K
+        Surface keys (a surface given neither a treatment nor an emissivity
+        falls back to a material-class value, reported as a
+        SURFACE_DEFAULTED warning):
+            surface or epsilon (non-shield classes); surface_in / eps_in and
+            surface_out / eps_out (shields); surface_g1 / eps_g1 and
+            surface_g2 / eps_g2 (two-layer shields, gap faces)
         Optional keys:
             h_override, h_in_override, h_out_override,
             epsilon (direct override), eps_in, eps_out, eps_g1, eps_g2,
             surface_in, surface_out, surface_g1, surface_g2,
-            t_exh_K, h_gap, convection_zone_in, convection_zone_out
+            t_exh_K, h_gap, f12, convection_zone_in, convection_zone_out,
+            t_fluid_K (this part's fluid temperature, e.g. exhaust gas
+            inside a pipe; overrides the project's),
+            shield_max_iter (shield solve iteration limit; also a project
+            key)
 
     project : dict
         Project-level defaults.  Expected keys:
             t_fluid_K, t_surr_K
+        The part's fluid temperature (its own t_fluid_K, else the
+        project's) is the single temperature used for the convective HTC
+        (film temperature and driving difference) and for the boundary
+        flux q'' alike.
         Optional keys:
-            max_dt, dt, fo_max, tau_bc, safety_factor,
+            max_dt, dt, fo_max, tau_bc, safety_factor, transient_scheme,
             allowable_flux_error, t_exh_K (global exhaust temp)
 
     Returns
@@ -766,6 +1105,8 @@ def process_part(part: dict, project: dict) -> dict:
         part_id             — echoed back
         material            — echoed back
         component_class     — echoed back
+        t_fluid_K           — the fluid temperature used for h and q'' (K)
+        t_fluid_source      — "part" or "project": where it came from
         h_used              — the h value used (W/m^2 K)
         conduction          — dict from conduction calculator (or None)
         biot                — dict from Biot number (or None)
@@ -774,11 +1115,39 @@ def process_part(part: dict, project: dict) -> dict:
         transient           — dict from transient calculator (or None)
         governing_dx_mm     — the smallest (most restrictive) mesh size
         governing_constraint — which calculator produced it
+        warnings            — list of coded warnings (code, severity,
+                              message; input warnings also carry "key")
+
+    Raises
+    ------
+    PartInputError (a KeyError and a ValueError)
+        Before anything is computed, for a missing or unknown material or
+        component class, an unknown or missing convection zone, or an
+        unknown surface treatment (see _validate_part).  The message names
+        the part, the key and the allowed set.
     """
+    _validate_part(part)
+    input_warnings = []
+    solve_warnings = []
+    film_out_of_range = []   # (what, film temperature) pairs
+
+    def surface_eps(key):
+        eps_value, source = _resolve_epsilon_with_source(part, key)
+        if source.endswith("fallback"):
+            input_warnings.append(
+                _surface_default_warning(part, key, eps_value, source))
+        return eps_value
+
     pid = part["part_id"]
     mat = get_material(part["material"])
     cls = part["component_class"]
-    t_fluid = project["t_fluid_K"]
+    # One fluid temperature per part, for h and q'' alike: the part's own
+    # t_fluid_K when given (e.g. exhaust gas inside a pipe), else the
+    # project's.
+    if "t_fluid_K" in part:
+        t_fluid, t_fluid_source = part["t_fluid_K"], "part"
+    else:
+        t_fluid, t_fluid_source = project["t_fluid_K"], "project"
     t_surr = project["t_surr_K"]
 
     # Resolve class defaults (explicit None means "use class default")
@@ -798,7 +1167,7 @@ def process_part(part: dict, project: dict) -> dict:
     # Resolve general emissivity for non-shield classes.
     # Shield classes resolve eps_in/eps_out separately in their branch.
     if cls not in ("shield", "multilayer_shield"):
-        eps = _resolve_epsilon(part, mat, "surface")
+        eps = surface_eps("surface")
     else:
         eps = None  # will be set per-surface in shield branches
 
@@ -806,6 +1175,8 @@ def process_part(part: dict, project: dict) -> dict:
         "part_id": pid,
         "material": part["material"],
         "component_class": cls,
+        "t_fluid_K": t_fluid,
+        "t_fluid_source": t_fluid_source,
         "conduction": None,
         "biot": None,
         "radiation": None,
@@ -826,23 +1197,26 @@ def process_part(part: dict, project: dict) -> dict:
     #  SHIELD classes — solve temperature first, then mesh size
     # ------------------------------------------------------------------
     if cls == "shield":
-        t_exh = part.get("t_exh_K", project.get("t_exh_K", 1073.15))
-        eps_in = _resolve_epsilon(part, mat, "surface_in")
-        eps_out = _resolve_epsilon(part, mat, "surface_out")
+        t_exh = _shield_input(part, project, "t_exh_K", 1073.15,
+                              input_warnings, "exhaust source temperature, K",
+                              project_key=True)
+        eps_in = surface_eps("surface_in")
+        eps_out = surface_eps("surface_out")
 
         # Resolve h for each side — shields use static lookup because
         # t_surf is not yet known (it's the solve output)
-        zone_in = part.get("convection_zone_in", part.get("convection_zone"))
-        zone_out = part.get("convection_zone_out", part.get("convection_zone"))
-        h_in = part.get("h_in_override", get_conservative_h(zone_in))
-        h_out = part.get("h_out_override", get_conservative_h(zone_out))
+        h_in, h_out = _shield_side_h(part)
 
         shield_result = SingleLayerShieldCalculator.mesh_size(
             k=k, max_dt=max_dt,
             t_exh=t_exh, t_fluid=t_fluid, t_surr=t_surr,
             h_in=h_in, h_out=h_out,
             eps_in=eps_in, eps_out=eps_out,
+            **_shield_solver_options(part, project),
         )
+        if not shield_result["converged"]:
+            solve_warnings.append(
+                _shield_not_converged_warning(shield_result, "single-layer"))
         result["shield"] = shield_result
         result["h_used"] = {"h_in": h_in, "h_out": h_out}
         result["eps_used"] = {"eps_in": eps_in, "eps_out": eps_out}
@@ -852,31 +1226,39 @@ def process_part(part: dict, project: dict) -> dict:
         t_surf = shield_result["t_shield_K"]
 
     elif cls == "multilayer_shield":
-        t_exh = part.get("t_exh_K", project.get("t_exh_K", 1073.15))
-        eps_in = _resolve_epsilon(part, mat, "surface_in")
-        eps_out = _resolve_epsilon(part, mat, "surface_out")
-        eps_g1 = _resolve_epsilon(part, mat, "surface_g1")
-        eps_g2 = _resolve_epsilon(part, mat, "surface_g2")
-        h_gap = part.get("h_gap", 15.0)
+        t_exh = _shield_input(part, project, "t_exh_K", 1073.15,
+                              input_warnings, "exhaust source temperature, K",
+                              project_key=True)
+        eps_in = surface_eps("surface_in")
+        eps_out = surface_eps("surface_out")
+        eps_g1 = surface_eps("surface_g1")
+        eps_g2 = surface_eps("surface_g2")
+        h_gap = _shield_input(part, project, "h_gap", 15.0, input_warnings,
+                              "gap conductance, W/m^2 K")
+        f12 = _shield_input(part, project, "f12", 1.0, input_warnings,
+                            "gap view factor; 1.0 is parallel plates, "
+                            "offset or curved gaps are lower")
 
-        zone_in = part.get("convection_zone_in", part.get("convection_zone"))
-        zone_out = part.get("convection_zone_out", part.get("convection_zone"))
-        h_in = part.get("h_in_override", get_conservative_h(zone_in))
-        h_out = part.get("h_out_override", get_conservative_h(zone_out))
+        h_in, h_out = _shield_side_h(part)
 
         shield_result = MultilayerShieldCalculator.mesh_sizes(
             k_metal=k, max_dt=max_dt,
             t_exh=t_exh, t_fluid=t_fluid, t_surr=t_surr,
             h_in=h_in, h_out=h_out, h_gap=h_gap,
             eps_in=eps_in, eps_out=eps_out,
-            eps_g1=eps_g1, eps_g2=eps_g2,
+            eps_g1=eps_g1, eps_g2=eps_g2, f12=f12,
+            **_shield_solver_options(part, project),
         )
+        if not shield_result["converged"]:
+            solve_warnings.append(
+                _shield_not_converged_warning(shield_result, "two-layer"))
         result["shield"] = shield_result
         result["h_used"] = {"h_in": h_in, "h_out": h_out, "h_gap": h_gap}
         result["eps_used"] = {
             "eps_in": eps_in, "eps_out": eps_out,
             "eps_g1": eps_g1, "eps_g2": eps_g2,
         }
+        result["f12_used"] = f12
         dx_candidates.append((shield_result["layer1_max_dx_mm"], "shield_layer1"))
         dx_candidates.append((shield_result["layer2_max_dx_mm"], "shield_layer2"))
 
@@ -897,20 +1279,29 @@ def process_part(part: dict, project: dict) -> dict:
             }
         else:
             char_len = part.get("char_length_mm", 100.0) / 1000.0
-            zone_t_fluid = get_zone_air_temp(
-                part["convection_zone"], "high",
-            )
-            # Use zone air temp if project t_fluid not explicitly set
-            t_fluid_for_h = t_fluid if t_fluid != t_surr else zone_t_fluid
+            # h at the same fluid temperature as q'' below.
             h_est = _estimate_h_from_zone(
                 zone_name=part["convection_zone"],
                 t_surf=t_surf,
-                t_fluid=zone_t_fluid,
+                t_fluid=t_fluid,
                 char_length_m=char_len,
             )
             h = h_est["h"]
             result["h_used"] = h
             result["h_estimation"] = h_est
+            if h_est["method"] == "static_lookup":
+                solve_warnings.append({
+                    "code": "H_CORRELATION_FALLBACK",
+                    "severity": "caution",
+                    "message": (
+                        f"The h correlation failed "
+                        f"({h_est['fallback_reason']}); used the zone's "
+                        f"static h_high = {h:.1f} W/m^2 K instead."
+                    ),
+                })
+            elif not h_est["details"]["film_in_range"]:
+                film_out_of_range.append(
+                    ("the h estimate", h_est["details"]["t_film_K"]))
 
             # Propagate solver advisory from h estimation
             details = h_est.get("details")
@@ -954,9 +1345,16 @@ def process_part(part: dict, project: dict) -> dict:
     # ------------------------------------------------------------------
     #  Radiation mesh size (all classes)
     # ------------------------------------------------------------------
-    # For shields, use the exhaust-facing emissivity for radiation sizing
+    # For shields, use the exhaust-facing emissivity for radiation sizing,
+    # and the exhaust-facing driving flux for the conduction-driven
+    # gradient dT/dx ~ q/k (zones.estimate_spatial_gradient).
     eps_for_rad = eps if eps is not None else eps_in
-    q_total = result["conduction"]["q_total"] if result["conduction"] else None
+    if result["conduction"]:
+        q_total = result["conduction"]["q_total"]
+    elif cls == "shield":
+        q_total = result["shield"]["q_boundary"]
+    else:
+        q_total = result["shield"]["q_layer1"]
     grad = estimate_spatial_gradient(k, q_total=q_total, component_class=cls)
     if grad > 0:
         rad = RadiationMeshCalculator.max_mesh_size(
@@ -971,6 +1369,7 @@ def process_part(part: dict, project: dict) -> dict:
     #  Transient (if solver time-step provided)
     # ------------------------------------------------------------------
     dt_solver = project.get("dt")
+    trans = None
     if dt_solver is not None:
         fo_max = project.get("fo_max", 0.5)
         safety = project.get("safety_factor", 1.0)
@@ -979,9 +1378,14 @@ def process_part(part: dict, project: dict) -> dict:
         trans = TransientMeshCalculator.combined_transient_limits(
             k=k, rho=rho, cp=cp, dt=dt_solver,
             fo_max=fo_max, safety_factor=safety, tau_bc=tau_bc,
+            scheme=project.get("transient_scheme"),
         )
         result["transient"] = trans
-        dx_candidates.append((trans["recommended_dx_mm"], "transient"))
+        # The candidate is the transient upper bound, never the Fourier
+        # minimum: that is a lower bound, checked against the governing
+        # size below.
+        if trans["max_dx_mm"] < float("inf"):
+            dx_candidates.append((trans["max_dx_mm"], "transient"))
 
     # ------------------------------------------------------------------
     #  View factor curvature limit (if radius provided)
@@ -1046,6 +1450,9 @@ def process_part(part: dict, project: dict) -> dict:
         dx_candidates.append(
             (bl_result["max_dx_surface_mm"], "aero_boundary_layer")
         )
+        if not bl_result["film_in_range"]:
+            film_out_of_range.append(
+                ("the boundary-layer sizes", bl_result["t_film_K"]))
 
     # ------------------------------------------------------------------
     #  Governing constraint
@@ -1057,11 +1464,29 @@ def process_part(part: dict, project: dict) -> dict:
         result["all_constraints"] = [
             {"dx_mm": dx, "source": src} for dx, src in dx_candidates
         ]
+    if film_out_of_range:
+        solve_warnings.append(_film_temperature_warning(film_out_of_range))
+    if trans is not None:
+        conflict = _transient_conflict_warning(
+            trans, result["governing_dx_mm"], fo_max, dt_solver)
+        if conflict is not None:
+            solve_warnings.append(conflict)
+    if not result["governing_dx_mm"] < float("inf"):
+        solve_warnings.append({
+            "code": "NO_FINITE_SIZE",
+            "severity": "warning",
+            "message": (
+                "No constraint produced a finite element size (every "
+                "candidate is unbounded, e.g. zero net boundary flux). "
+                "Size this part from its geometry."
+            ),
+        })
 
     # ------------------------------------------------------------------
     #  Automatic warnings from parametric study thresholds
     # ------------------------------------------------------------------
-    result["warnings"] = _generate_warnings(part, result, project)
+    result["warnings"] = (input_warnings + solve_warnings
+                          + _generate_warnings(part, result, project))
 
     return result
 

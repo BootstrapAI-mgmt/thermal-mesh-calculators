@@ -1,0 +1,126 @@
+name: CI
+
+# Every push and pull request runs one Linux leg (Python 3.11), the open/closed map
+# check and the package job. The rest of the supported matrix (the Python 3.9 floor,
+# Python 3.13 with PyYAML, and Windows) runs weekly and on manual dispatch; run it
+# from the Actions tab before tagging a release.
+#
+# Pushes to every branch, not just main. Development here happens on branches in
+# this repository, so a branch finds out its suite is red before a pull request
+# exists — and a workflow change can be verified on the branch that makes it.
+# `pull_request` covers fork branches, which never push a branch here.
+on:
+  push:
+    branches: ['**']
+  pull_request:
+  schedule:
+    # Mondays, 06:17 UTC.
+    - cron: '17 6 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: pytest (${{ matrix.os }}, Python ${{ matrix.python-version }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest]
+        python-version: ['3.11']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Install pytest
+        # pytest and nothing else. The package has no runtime dependencies and
+        # imports straight from the repository root, which is how it is used from
+        # a clone (README, "Installation"). Installing it here would only risk
+        # testing a stale copy.
+        run: python -m pip install --upgrade pip pytest
+      - name: Run the suite
+        run: python -m pytest -q -rs
+
+  test-full-matrix:
+    name: pytest (${{ matrix.os }}, Python ${{ matrix.python-version }})
+    # The weekly and manual legs; see the comment at the top of this file.
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            python-version: '3.9'
+          - os: ubuntu-latest
+            python-version: '3.13'
+            pyyaml: 'true'
+          # The users are CAE engineers on Windows workstations, and the CAE
+          # pre-processors that embed this package run there. One job keeps the
+          # suite honest on Windows without tripling the matrix.
+          - os: windows-latest
+            python-version: '3.11'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Install pytest
+        # As in the test job: pytest and nothing else.
+        run: python -m pip install --upgrade pip pytest
+      - name: Install PyYAML (one leg only)
+        # check_open_closed_map.py parses the map with PyYAML when it is present
+        # and with its own mini parser when it is not, and
+        # test_fallback_parser_agrees_with_pyyaml_on_the_real_map cross-checks the
+        # two. That test is an importorskip, so with PyYAML absent everywhere it
+        # would skip on every leg and the mini parser would be free to drift.
+        # This leg carries PyYAML so the cross-check runs; the others, and the
+        # open-closed-map job, stay bare so the mini parser is still the code
+        # path actually exercised. On push and pull-request runs the cross-check
+        # is skipped, and -rs names the skip in the log.
+        if: matrix.pyyaml == 'true'
+        run: python -m pip install pyyaml
+      - name: Run the suite
+        run: python -m pytest -q -rs
+
+  open-closed-map:
+    name: open/closed map
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Every tracked file resolves to exactly one bucket
+        run: python scripts/check_open_closed_map.py
+
+  package:
+    name: build, twine check, install the wheel
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Install build tooling
+        run: python -m pip install --upgrade pip build twine
+      - name: Build the sdist and the wheel
+        run: python -m build
+      - name: twine check
+        run: python -m twine check dist/*
+      - name: Install the wheel into a clean environment and import it
+        # Both the `cd` and `-I` matter. The repository root contains
+        # thermal_mesh_calculators/, so an import run from the checkout resolves to
+        # the source tree and would prove nothing about the built wheel; `-I` also
+        # drops the cwd and the PYTHON* environment from sys.path. __file__ is
+        # printed so the log shows the import really came out of site-packages.
+        run: |
+          python -m venv "$RUNNER_TEMP/wheel-venv"
+          VPY="$RUNNER_TEMP/wheel-venv/bin/python"
+          "$VPY" -m pip install --upgrade pip
+          "$VPY" -m pip install dist/*.whl
+          cd "$RUNNER_TEMP"
+          "$VPY" -I -c "import thermal_mesh_calculators as t; print(t.__file__); print(t.__version__)"

@@ -370,3 +370,74 @@ class TestMultilayerMeshSizes:
         q1 = abs(result["q_rad_in"]) + abs(result["q_conv_in"])
         expected = 45.0 * 15.0 / q1 * 1000.0
         assert result["layer1_max_dx_mm"] == pytest.approx(expected, rel=1e-6)
+
+
+# -----------------------------------------------------------------------
+# Non-convergence: flagged, with last-iterate fluxes, never an inf size
+# -----------------------------------------------------------------------
+
+_ML_KW = dict(
+    t_exh=1073.15, t_fluid=353.15, t_surr=353.15,
+    h_in=30.0, h_out=30.0, h_gap=15.0,
+    eps_in=0.4, eps_out=0.4, eps_g1=0.4, eps_g2=0.4,
+)
+_SL_KW = dict(
+    k=45.0, max_dt=15.0, t_exh=1073.15, t_fluid=353.15, t_surr=353.15,
+    h_in=30.0, h_out=30.0, eps_in=0.4, eps_out=0.4,
+)
+
+
+class TestNonConvergence:
+
+    def test_multilayer_out_of_iterations_reports_last_iterate(self):
+        result = MultilayerShieldCalculator.solve_temperatures(max_iter=1, **_ML_KW)
+        assert result["converged"] is False
+        assert result["iterations"] == 1
+        for key in ("q_rad_in", "q_conv_in", "q_gap_cond", "q_gap_rad",
+                    "q_rad_out", "q_conv_out"):
+            assert key in result
+        r1, r2 = _energy_balance_residual_multi(result)
+        assert result["residual_W_m2"] == pytest.approx(max(abs(r1), abs(r2)))
+        assert result["residual_W_m2"] > 0.1  # the tolerance it missed
+
+    def test_multilayer_converged_residual_within_tolerance(self):
+        result = MultilayerShieldCalculator.solve_temperatures(**_ML_KW)
+        assert result["converged"] is True
+        assert result["residual_W_m2"] < 0.1
+
+    def test_multilayer_unconverged_sizes_are_finite(self):
+        result = MultilayerShieldCalculator.mesh_sizes(
+            k_metal=45.0, max_dt=15.0, max_iter=1, **_ML_KW)
+        assert result["converged"] is False
+        assert 0 < result["layer1_max_dx_mm"] < float("inf")
+        assert 0 < result["layer2_max_dx_mm"] < float("inf")
+
+    def test_single_layer_mesh_size_forwards_max_iter(self):
+        result = SingleLayerShieldCalculator.mesh_size(max_iter=1, **_SL_KW)
+        assert result["converged"] is False
+        assert result["iterations"] == 1
+        assert result["residual_W_m2"] > 0
+        assert 0 < result["max_dx_mm"] < float("inf")
+
+    def test_single_layer_mesh_size_forwards_tol(self):
+        result = SingleLayerShieldCalculator.mesh_size(tol=1000.0, **_SL_KW)
+        assert result["converged"] is True
+        assert result["iterations"] == 1
+
+    def test_single_layer_default_still_converges(self):
+        result = SingleLayerShieldCalculator.mesh_size(**_SL_KW)
+        assert result["converged"] is True
+        assert result["residual_W_m2"] < 1.0
+
+
+class TestLayerFluxesReported:
+
+    def test_mesh_sizes_report_the_driving_fluxes(self):
+        result = MultilayerShieldCalculator.mesh_sizes(
+            k_metal=45.0, max_dt=15.0, **_ML_KW)
+        assert result["q_layer1"] == pytest.approx(
+            abs(result["q_rad_in"]) + abs(result["q_conv_in"]))
+        assert result["q_layer2"] == pytest.approx(
+            abs(result["q_rad_out"]) + abs(result["q_conv_out"]))
+        assert result["layer1_max_dx_mm"] == pytest.approx(
+            45.0 * 15.0 / result["q_layer1"] * 1000.0)

@@ -359,3 +359,33 @@ class TestHFromVelocity:
         """h_from_velocity should include solver advisory."""
         result = h_from_velocity(velocity_mph=10.0)
         assert "solver_advisory" in result
+
+
+class TestFilmTemperatureRange:
+    """Air properties outside the fitted range are clamped, and say so."""
+
+    def test_in_range_properties_report_their_film_temperature(self):
+        props = air_properties(500.0)
+        assert props["in_range"] is True
+        assert props["t_film_K"] == 500.0
+        assert props["t_eval_K"] == 500.0
+
+    @pytest.mark.parametrize("t_film, t_eval", [(100.0, 250.0), (1000.0, 700.0)])
+    def test_outside_the_range_is_clamped_and_flagged(self, t_film, t_eval):
+        props = air_properties(t_film)
+        assert props["in_range"] is False
+        assert props["t_eval_K"] == t_eval
+        assert props["k_air"] == air_properties(t_eval)["k_air"]
+
+    @pytest.mark.parametrize("t_film", [250.0, 700.0])
+    def test_range_ends_are_in_range(self, t_film):
+        assert air_properties(t_film)["in_range"] is True
+
+    def test_estimate_h_reports_its_film_temperature(self):
+        hot = estimate_h(velocity=0.0, t_surf=1273.15, t_fluid=313.15,
+                         char_length=0.15)
+        assert hot["t_film_K"] == pytest.approx((1273.15 + 313.15) / 2.0)
+        assert hot["film_in_range"] is False
+        mild = estimate_h(velocity=4.47, t_surf=473.15, t_fluid=313.15,
+                          char_length=0.1)
+        assert mild["film_in_range"] is True

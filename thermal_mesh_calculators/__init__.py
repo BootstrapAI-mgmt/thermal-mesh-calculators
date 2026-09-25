@@ -31,6 +31,7 @@ from thermal_mesh_calculators.batch import (
     summary_table,
     MATERIALS,
     SURFACE_TREATMENTS,
+    PartInputError,
 )
 from thermal_mesh_calculators.zones import (
     CONVECTION_ZONES,

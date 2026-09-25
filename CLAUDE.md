@@ -17,6 +17,7 @@ The target users are thermal simulation engineers doing underhood analysis (exha
 thermal_mesh_calculators/       # Python package (pure stdlib, no dependencies)
     __init__.py                 # Exports all calculator classes + h_estimator (v0.5.0)
     constants.py                # Stefan-Boltzmann constant
+    _guards.py                  # Input range guards shared by the calculators (internal)
     conduction.py               # BoundaryDrivenConductionCalculator
     convection.py               # ConvectionMeshCalculator
     radiation.py                # RadiationMeshCalculator
@@ -36,15 +37,18 @@ tests/
     test_conduction.py          # 14 tests (incl. lateral gradient)
     test_convection.py          # 12 tests (incl. cell Biot 20x)
     test_radiation.py           # 10 tests
-    test_shields.py             # 26 tests (incl. F₁₂ view factor)
-    test_transient.py           # 16 tests
+    test_shields.py             # 33 tests (incl. F₁₂ view factor, non-convergence)
+    test_transient.py           # 34 tests (incl. the explicit path's window and remedies)
     test_zones.py               # 18 tests
-    test_h_estimator.py         # 35 tests — forced, natural, mixed, opposing, Richardson, advisory
+    test_h_estimator.py         # 41 tests — forced, natural, mixed, opposing, Richardson, advisory, film range
     test_boundary_layer.py      # 40 tests — skin friction, BL thickness, buoyancy, inflation, regimes, prism rec, ER_v
-    test_batch.py               # 33 tests — material DB, surface DB, h estimation, lateral, BL integration
+    test_batch.py               # 92 tests — material DB, surface DB, h estimation, lateral, BL integration, input validation, warnings
     test_conduction_size_wall.py # 17 tests — thickness-aware sizing, N_cells + Biot reporting
+    test_fail_loud.py           # 22 tests — one planted input per formerly silent path, each failing on 0.6.2
+    test_input_guards.py        # 82 tests — one planted violation per guarded input
     test_open_closed_map.py     # 18 tests — OPEN-CLOSED-MAP.yaml schema + checker (not physics)
-                                # 239 tests total
+    test_release_statements.py  # 26 tests — version pins, tag links, "On PyPI since" vs CHANGELOG, the documented test counts (not physics)
+                                # 459 tests total
 ```
 
 ### Design Decisions
@@ -91,7 +95,7 @@ Each mode imposes an independent constraint. The binding constraint (smallest ma
 
 For transient simulations, three additional constraints apply:
 
-- **Penetration depth**: `dx_max <= C * sqrt(alpha * dt)` — thermal wave resolution
+- **Penetration depth**: `dx_max <= C * sqrt(alpha * dt)` — thermal wave resolution, for implicit schemes only; an explicit scheme's own stability limit (the Fourier minimum) bounds it instead (docs/math_derivations.md §7.4)
 - **Fourier number**: `dx_min = sqrt(alpha * dt / Fo_max)` — explicit solver stability (Fo <= 0.5 for 1D, 1/6 for 3D) or implicit accuracy (Fo <= 5)
 - **Drive-cycle**: `dx_max <= sqrt(alpha * tau_bc)` — resolution across operating point transitions
 
@@ -128,9 +132,9 @@ The `batch.py` module includes inline databases (no external files needed):
 - **43 materials**: Steels (mild, HSLA, galvanised, SS304, SS409), Aluminium (6061, 5052, cast A356, A380), Cast iron (grey, ductile), Copper, Brass, Mg AZ91, Ti-6Al-4V, Zinc, Inconel 625, Filled plastics (PA66-GF30, PA6-GF30, PP-GF30, PBT-GF30, PPS-GF40), Unfilled plastics (PA66, PP, HDPE, ABS, PC, PC/ABS, POM, PET), Rubbers (EPDM, silicone, NBR, natural, neoprene, FKM), Composites/specialty (SMC, CFRP, glass, alumina, cordierite, fibreglass insulation, ceramic blanket)
 - **30 surface treatments**: Bare/oxidised metals, galvanised, chrome/nickel/zinc plated, e-coat, powder coat, ceramic TBC, painted variants, rusted steel, glass, composite, fabric
 
-Emissivity fallback logic: non-metals → 0.90, aluminium → 0.30, other metals → 0.73.
+Emissivity fallback logic: non-metals → 0.90, aluminium → 0.30, other metals → 0.73. A surface resolved this way is reported as a `SURFACE_DEFAULTED` warning.
 
-## Current State (v0.6.1)
+## Current State (v0.6.2)
 
 ### What's Done
 - [x] All seven calculator classes implemented and tested
@@ -155,10 +159,12 @@ Emissivity fallback logic: non-metals → 0.90, aluminium → 0.30, other metals
 - [x] Automatic batch warnings from parametric study thresholds (v0.3)
 - [x] Parametric regime crossover studies (analysis/ directory)
 - [x] 11 worked automotive examples with verified output
-- [x] 221 pytest unit tests with analytical verification and energy balance closure
+- [x] 415 pytest unit tests with analytical verification and energy balance closure
+- [x] Inputs checked (unreleased; CHANGELOG `[Unreleased]`): unknown part names raise `PartInputError` naming the allowed set, physical inputs are range-guarded, and defaulted or extrapolated inputs, shield non-convergence and transient conflicts come back as coded warnings
 - [x] Full mathematical derivation documentation (docs/math_derivations.md, Sections 1–14)
 - [x] Published to PyPI — `pip install thermal-mesh-calculators` (0.6.1, 2026-09-16,
-      the only release on the index; `requires-python` narrowed to `>=3.9` for it)
+      the first release on the index, `requires-python` narrowed to `>=3.9` for it;
+      0.6.2 followed on 2026-09-17)
 
 ### Key Findings from Parametric Studies
 
@@ -233,7 +239,7 @@ PEP 621, setuptools backend):
 
 ```bash
 python -m build                       # -> dist/*.whl + dist/*.tar.gz
-pip install thermal-mesh-calculators  # once published to PyPI
+pip install thermal-mesh-calculators  # from PyPI, 0.6.1 onwards
 ```
 
 The distribution version is read dynamically from
@@ -246,7 +252,7 @@ follows. Runtime dependencies must stay empty — see Design Decisions #1.
 python -m pytest tests/ -v
 ```
 
-239 tests across 11 test files (221 physics + 18 for the open/closed map checker).
+459 tests across 14 test files (415 physics and input-validation + 18 for the open/closed map checker + 26 for the release statements and the documented test counts).
 Test strategy:
 - Hand-computed analytical solutions for known inputs
 - Edge cases (zero flux, zero emissivity, pure convection/radiation)
@@ -257,6 +263,9 @@ Test strategy:
 - Convection regime classification (Richardson number boundaries)
 - Solver advisory correctness (severity levels by regime)
 - Material/surface database coverage and fallback logic
+- Fail-loud gate (`tests/test_fail_loud.py`): one planted input per formerly silent path, each failing against 0.6.2
+- Input guards (`tests/test_input_guards.py`): one planted violation per guarded parameter
+- Documented test counts (`tests/test_release_statements.py`): every count stated in this file and in `.github/copilot-instructions.md` is checked against a collection of the suite, so adding a test means updating those counts
 
 ## Common Agent Tasks
 
@@ -303,5 +312,5 @@ This project grew from a discussion about the physical dependencies of thermal m
 8. v0.4: Physics improvements (lateral gradient, cell Biot 20x, F₁₂ view factor, opposing mixed convection)
 9. v0.5: Aerodynamic boundary layer calculator (two-regime: external_forced + mixed_unknown)
 10. v0.5.1: Prism recommendation logic — low-Re tet sufficiency analysis, wall gradient discriminator, ER_v reporting
-11. v0.6.0: Thickness-aware `size_wall()` (N_cells + Biot reporting, zero-flux pole guard, prescribed-Ts consistency check); first **packaged** release — `pyproject.toml`, Apache-2.0 `LICENSE`, `CHANGELOG.md`, git tag `v0.6.0`, buildable wheel
+11. v0.6.0: Thickness-aware `size_wall()` (N_cells + Biot reporting, zero-flux pole guard, prescribed-Ts consistency check); first **packaged** release — `pyproject.toml`, Apache-2.0 `LICENSE`, `CHANGELOG.md`, git tag `v0.6.0` (not in this public repository, whose first tag is `v0.6.2`), buildable wheel
 12. v0.6.1: `requires-python` narrowed to >=3.9; first public PyPI release (2026-09-16).

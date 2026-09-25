@@ -245,12 +245,17 @@ def main():
     # ------------------------------------------------------------------
     separator("10. Transient Mesh Constraints — Steel Exhaust Bracket")
 
-    # Steel bracket: k=45, rho=7800, cp=500, dt=0.5 s (explicit solver)
+    # Steel bracket: k=45, rho=7800, cp=500, dt=0.5 s, explicit solver
+    # (Fo <= 0.5).  Stability bounds the element from BELOW; the per-step
+    # penetration depth does not bound an explicit scheme (it is an
+    # implicit resolution guideline), so the drive cycle sets the upper
+    # bound.
     tc = TransientMeshCalculator()
 
     pen = tc.penetration_depth(k=45.0, rho=7800.0, cp=500.0, dt=0.5)
     print(f"  Thermal diffusivity: {pen['alpha']:.3e} m^2/s")
-    print(f"  Penetration depth (dt=0.5s): {pen['max_dx_mm']:.2f} mm")
+    print(f"  Penetration depth (dt=0.5s): {pen['max_dx_mm']:.2f} mm"
+          f"  (implicit guideline; not applied here)")
 
     fo = tc.fourier_number_limit(k=45.0, rho=7800.0, cp=500.0, dt=0.5, fo_max=0.5)
     print(f"  Fourier stability min dx:    {fo['min_dx_mm']:.2f} mm  (Fo <= {fo['fo_max']})")
@@ -260,8 +265,26 @@ def main():
         fo_max=0.5, safety_factor=1.0, tau_bc=20.0,
     )
     print(f"  Drive-cycle limit (tau=20s): {combo['drive_cycle_max_dx_mm']:.2f} mm")
+    print(f"  >> Feasible window ({combo['scheme']}): "
+          f"{combo['fourier_min_dx_mm']:.2f} to {combo['max_dx_mm']:.2f} mm")
     print(f"  >> Recommended dx: {combo['recommended_dx_mm']:.2f} mm")
     print(f"     Binding constraint: {combo['binding_constraint']}")
+
+    # A time step too long for the drive cycle: the conflict carries a
+    # remedy that changes the result (dt <= Fo_max * tau_bc).
+    slow = tc.combined_transient_limits(
+        k=45.0, rho=7800.0, cp=500.0, dt=50.0,
+        fo_max=0.5, safety_factor=1.0, tau_bc=20.0,
+    )
+    print()
+    print(f"  dt = 50 s: {slow['advice']}")
+    fixed = tc.combined_transient_limits(
+        k=45.0, rho=7800.0, cp=500.0,
+        dt=slow["conflict"]["remedies"][0]["max_value"],
+        fo_max=0.5, safety_factor=1.0, tau_bc=20.0,
+    )
+    print(f"  With that dt: feasible = {fixed['feasible']}, "
+          f"recommended dx = {fixed['recommended_dx_mm']:.2f} mm")
 
     # ------------------------------------------------------------------
     # 11. TRANSIENT — Implicit solver comparison (plastic part)

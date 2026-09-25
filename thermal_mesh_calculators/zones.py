@@ -60,6 +60,8 @@ Units:  h in W/m^2 K,  velocity in m/s,  temperature in C (zone map)
         and K (internal calculations),  gradient in K/m
 """
 
+from thermal_mesh_calculators._guards import require_positive
+
 
 # ---------------------------------------------------------------------------
 #  Convection zone definitions
@@ -416,7 +418,10 @@ def estimate_spatial_gradient(
     Returns
     -------
     float — estimated spatial gradient (K/m)
+
+    Raises ValueError for k not > 0.
     """
+    require_positive("k", k, "W/m K")
     if component_class == "exhaust":
         return SPATIAL_GRADIENT_DEFAULTS["exhaust_max"]
 

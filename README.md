@@ -1,5 +1,7 @@
 # thermal-mesh-calculators
 
+[![CI](https://github.com/BootstrapAI-mgmt/thermal-mesh-calculators/actions/workflows/ci.yml/badge.svg)](https://github.com/BootstrapAI-mgmt/thermal-mesh-calculators/actions/workflows/ci.yml)
+
 Physics-driven thermal mesh sizing calculators for automotive CAE — conduction, convection, radiation, and heat shield solvers.
 
 ## Motivation
@@ -61,7 +63,7 @@ pip install thermal-mesh-calculators
 On PyPI since 0.6.1. To pin an immutable release straight from git instead:
 
 ```bash
-pip install "thermal-mesh-calculators @ git+https://github.com/BootstrapAI-mgmt/thermal-mesh-calculators.git@v0.6.1"
+pip install "thermal-mesh-calculators @ git+https://github.com/BootstrapAI-mgmt/thermal-mesh-calculators.git@v0.6.2"
 ```
 
 The package has **no runtime dependencies** — it is pure standard library, by

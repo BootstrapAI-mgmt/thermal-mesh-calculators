@@ -42,6 +42,12 @@ Transient extension (future):
 
 import math
 from thermal_mesh_calculators.constants import STEFAN_BOLTZMANN
+from thermal_mesh_calculators._guards import (
+    require_fraction,
+    require_non_negative,
+    require_positive,
+    require_temperatures,
+)
 
 # Biot-number regime thresholds for size_wall() (classical lumped-capacitance
 # screen: Bi < 0.1 is thermally thin; Bi > 1 means the wall resistance
@@ -101,7 +107,19 @@ class BoundaryDrivenConductionCalculator:
             q_rad     : float   — radiation flux component (W/m^2)
             q_total   : float   — total boundary flux magnitude (W/m^2)
             rad_fraction : float — fraction of total flux from radiation
+
+        Raises
+        ------
+        ValueError
+            k, max_dt or a temperature not > 0, h < 0, or epsilon outside
+            [0, 1].
         """
+        require_positive("k", k, "W/m K")
+        require_non_negative("h", h, "W/m^2 K")
+        require_temperatures(t_surf=t_surf, t_fluid=t_fluid, t_surr=t_surr)
+        require_fraction("epsilon", epsilon)
+        require_positive("max_dt", max_dt, "K")
+
         q_conv = h * (t_surf - t_fluid)
         q_rad = epsilon * STEFAN_BOLTZMANN * (t_surf**4 - t_surr**4)
         q_total = abs(q_conv + q_rad)
@@ -416,8 +434,16 @@ class BoundaryDrivenConductionCalculator:
             h_rad_linearised   : float — 4*eps*sigma*T^3 (W/m^2 K)
             fin_parameter_m    : float — m = sqrt(h_total / (k*t)) (1/m)
             decay_length_mm    : float — 1/m in mm
+
+        Raises
+        ------
+        ValueError
+            k or t_surf not > 0, h < 0, or epsilon outside [0, 1].
         """
-        from thermal_mesh_calculators.constants import STEFAN_BOLTZMANN
+        require_positive("k", k, "W/m K")
+        require_non_negative("h", h, "W/m^2 K")
+        require_fraction("epsilon", epsilon)
+        require_positive("t_surf", t_surf, "K")
 
         h_rad = 4.0 * epsilon * STEFAN_BOLTZMANN * (t_surf ** 3)
         h_total = h + h_rad
@@ -459,5 +485,9 @@ class BoundaryDrivenConductionCalculator:
         -------
         float — maximum element size (mm) to resolve the thermal front
         """
+        require_positive("k", k, "W/m K")
+        require_positive("rho", rho, "kg/m^3")
+        require_positive("cp", cp, "J/kg K")
+        require_positive("dt", dt, "s")
         alpha = k / (rho * cp)
         return math.sqrt(alpha * dt) * 1000.0

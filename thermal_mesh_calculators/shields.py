@@ -35,6 +35,12 @@ mesh targets for each layer.
 
 import math
 from thermal_mesh_calculators.constants import STEFAN_BOLTZMANN
+from thermal_mesh_calculators._guards import (
+    require_fraction,
+    require_non_negative,
+    require_positive,
+    require_temperatures,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -113,6 +119,8 @@ class SingleLayerShieldCalculator:
             t_shield_C  : float — equilibrium temperature (deg C)
             converged   : bool
             iterations  : int
+            residual_W_m2 : float — |energy-balance residual| at t_shield_K
+                                    (W/m^2)
             q_rad_in    : float — radiation absorbed from exhaust (W/m^2)
             q_rad_out   : float — radiation emitted to surroundings (W/m^2)
             q_conv_in   : float — convective flux, exhaust side (W/m^2)
@@ -121,6 +129,11 @@ class SingleLayerShieldCalculator:
             h_out       : float — resolved outer HTC used (W/m^2 K)
         """
         h_i, h_o = SingleLayerShieldCalculator._resolve_htc(h_in, h_out, h_total)
+        require_temperatures(t_exh=t_exh, t_fluid=t_fluid, t_surr=t_surr)
+        require_fraction("eps_in", eps_in)
+        require_fraction("eps_out", eps_out)
+        require_non_negative("h_in", h_i, "W/m^2 K")
+        require_non_negative("h_out", h_o, "W/m^2 K")
         h_sum = h_i + h_o
 
         t = (t_exh + t_fluid) / 2.0  # initial guess
@@ -146,6 +159,8 @@ class SingleLayerShieldCalculator:
                     "t_shield_C": t - 273.15,
                     "converged": True,
                     "iterations": i + 1,
+                    "residual_W_m2": abs(
+                        q_rad_in - q_rad_out - q_conv_in - q_conv_out),
                     "q_rad_in": q_rad_in,
                     "q_rad_out": q_rad_out,
                     "q_conv_in": q_conv_in,
@@ -155,15 +170,21 @@ class SingleLayerShieldCalculator:
                 }
             t = t_new
 
+        # Not converged: report the fluxes at the last iterate, flagged.
+        q_rad_in = eps_in * STEFAN_BOLTZMANN * (t_exh**4 - t**4)
+        q_rad_out = eps_out * STEFAN_BOLTZMANN * (t**4 - t_surr**4)
+        q_conv_in = h_i * (t - t_fluid)
+        q_conv_out = h_o * (t - t_fluid)
         return {
             "t_shield_K": t,
             "t_shield_C": t - 273.15,
             "converged": False,
             "iterations": max_iter,
-            "q_rad_in": eps_in * STEFAN_BOLTZMANN * (t_exh**4 - t**4),
-            "q_rad_out": eps_out * STEFAN_BOLTZMANN * (t**4 - t_surr**4),
-            "q_conv_in": h_i * (t - t_fluid),
-            "q_conv_out": h_o * (t - t_fluid),
+            "residual_W_m2": abs(q_rad_in - q_rad_out - q_conv_in - q_conv_out),
+            "q_rad_in": q_rad_in,
+            "q_rad_out": q_rad_out,
+            "q_conv_in": q_conv_in,
+            "q_conv_out": q_conv_out,
             "h_in": h_i,
             "h_out": h_o,
         }
@@ -181,6 +202,8 @@ class SingleLayerShieldCalculator:
         h_in: float = None,
         h_out: float = None,
         h_total: float = None,
+        tol: float = 0.1,
+        max_iter: int = 50,
     ) -> dict:
         """
         Solve for shield temperature, then compute boundary-driven mesh size.
@@ -189,17 +212,24 @@ class SingleLayerShieldCalculator:
         ----------
         k : float       — shield thermal conductivity (W/m K)
         max_dt : float  — max allowable delta-T per element (K)
-        (remaining params forwarded to solve_temperature)
+        (remaining params, including tol and max_iter, forwarded to
+        solve_temperature)
 
         Returns
         -------
         dict with keys from solve_temperature plus:
             max_dx_mm     : float — maximum element size (mm)
             q_boundary    : float — driving flux at hottest face (W/m^2)
+
+        When the solve does not converge (``converged`` False) the size is
+        computed from the last iterate's fluxes: an estimate, not a result.
         """
+        require_positive("k", k, "W/m K")
+        require_positive("max_dt", max_dt, "K")
         result = cls.solve_temperature(
             t_exh, t_fluid, t_surr, eps_in, eps_out,
             h_in=h_in, h_out=h_out, h_total=h_total,
+            tol=tol, max_iter=max_iter,
         )
 
         # Driving flux at the exhaust face (radiation in + convection on that side)
@@ -280,48 +310,73 @@ class MultilayerShieldCalculator:
                            Default 1.0 (infinite parallel plates).
                            Use ~0.85 for typical automotive offset shields;
                            lower for small or highly non-parallel gaps.
+                           A zero gap emissivity or view factor means no
+                           radiative exchange across the gap (eps_eff = 0).
+        tol : float      — convergence tolerance on both balances (W/m^2)
+        max_iter : int   — iteration limit
 
         Returns
         -------
-        dict with both layer temperatures and convergence info
+        dict with both layer temperatures, the six fluxes, convergence info
+        (converged, iterations) and residual_W_m2, the larger of the two
+        |energy-balance residuals| at the returned temperatures.  When the
+        solve does not converge the temperatures and fluxes are those of the
+        last iterate: an estimate, flagged by ``converged`` False.
         """
+        require_temperatures(t_exh=t_exh, t_fluid=t_fluid, t_surr=t_surr)
+        for name, value in (("eps_in", eps_in), ("eps_out", eps_out),
+                            ("eps_g1", eps_g1), ("eps_g2", eps_g2),
+                            ("f12", f12)):
+            require_fraction(name, value)
+        for name, value in (("h_in", h_in), ("h_out", h_out),
+                            ("h_gap", h_gap)):
+            require_non_negative(name, value, "W/m^2 K")
+
         # Effective gap emissivity including geometric view factor
-        # Reduces to 1/(1/e1 + 1/e2 - 1) when F12 = 1
-        eps_eff = 1.0 / ((1.0 / eps_g1) + (1.0 / eps_g2) - 2.0 + (1.0 / f12))
+        # Reduces to 1/(1/e1 + 1/e2 - 1) when F12 = 1; tends to 0 as any of
+        # the three does (no radiative exchange across the gap).
+        if eps_g1 == 0 or eps_g2 == 0 or f12 == 0:
+            eps_eff = 0.0
+        else:
+            eps_eff = 1.0 / ((1.0 / eps_g1) + (1.0 / eps_g2) - 2.0 + (1.0 / f12))
+
+        def balance(t1, t2):
+            """The six fluxes at (t1, t2) and the two layer residuals."""
+            q = {
+                "q_rad_in": eps_in * STEFAN_BOLTZMANN * (t_exh**4 - t1**4),
+                "q_conv_in": h_in * (t_fluid - t1),
+                "q_gap_cond": h_gap * (t1 - t2),
+                "q_gap_rad": eps_eff * STEFAN_BOLTZMANN * (t1**4 - t2**4),
+                "q_rad_out": eps_out * STEFAN_BOLTZMANN * (t2**4 - t_surr**4),
+                "q_conv_out": h_out * (t2 - t_fluid),
+            }
+            f1 = q["q_rad_in"] + q["q_conv_in"] - q["q_gap_cond"] - q["q_gap_rad"]
+            f2 = q["q_gap_cond"] + q["q_gap_rad"] - q["q_rad_out"] - q["q_conv_out"]
+            return q, f1, f2
+
+        def report(t1, t2, converged, iterations, q, f1, f2):
+            out = {
+                "t1_K": t1,
+                "t1_C": t1 - 273.15,
+                "t2_K": t2,
+                "t2_C": t2 - 273.15,
+                "delta_T_C": (t1 - t2),
+                "converged": converged,
+                "iterations": iterations,
+                "eps_eff": eps_eff,
+                "residual_W_m2": max(abs(f1), abs(f2)),
+            }
+            out.update(q)
+            return out
 
         # Initial guesses
         t1 = t_exh - 100.0
         t2 = t_surr + 100.0
 
         for i in range(max_iter):
-            # Fluxes
-            q_rad_in = eps_in * STEFAN_BOLTZMANN * (t_exh**4 - t1**4)
-            q_conv_in = h_in * (t_fluid - t1)
-            q_gap_cond = h_gap * (t1 - t2)
-            q_gap_rad = eps_eff * STEFAN_BOLTZMANN * (t1**4 - t2**4)
-            q_rad_out = eps_out * STEFAN_BOLTZMANN * (t2**4 - t_surr**4)
-            q_conv_out = h_out * (t2 - t_fluid)
-
-            f1 = q_rad_in + q_conv_in - q_gap_cond - q_gap_rad
-            f2 = q_gap_cond + q_gap_rad - q_rad_out - q_conv_out
-
+            q, f1, f2 = balance(t1, t2)
             if abs(f1) < tol and abs(f2) < tol:
-                return {
-                    "t1_K": t1,
-                    "t1_C": t1 - 273.15,
-                    "t2_K": t2,
-                    "t2_C": t2 - 273.15,
-                    "delta_T_C": (t1 - t2),
-                    "converged": True,
-                    "iterations": i + 1,
-                    "eps_eff": eps_eff,
-                    "q_rad_in": q_rad_in,
-                    "q_conv_in": q_conv_in,
-                    "q_gap_cond": q_gap_cond,
-                    "q_gap_rad": q_gap_rad,
-                    "q_rad_out": q_rad_out,
-                    "q_conv_out": q_conv_out,
-                }
+                return report(t1, t2, True, i + 1, q, f1, f2)
 
             # Jacobian
             j11 = (-4.0 * eps_in * STEFAN_BOLTZMANN * t1**3
@@ -344,16 +399,11 @@ class MultilayerShieldCalculator:
             t1 += dt1
             t2 += dt2
 
-        return {
-            "t1_K": t1,
-            "t1_C": t1 - 273.15,
-            "t2_K": t2,
-            "t2_C": t2 - 273.15,
-            "delta_T_C": (t1 - t2),
-            "converged": False,
-            "iterations": max_iter,
-            "eps_eff": eps_eff,
-        }
+        # Out of iterations: report the last iterate with its fluxes, so the
+        # per-layer sizes stay finite estimates instead of becoming inf.
+        q, f1, f2 = balance(t1, t2)
+        return report(t1, t2, abs(f1) < tol and abs(f2) < tol, max_iter,
+                      q, f1, f2)
 
     @classmethod
     def mesh_sizes(
@@ -376,7 +426,16 @@ class MultilayerShieldCalculator:
         dict with keys from solve_temperatures() plus:
             layer1_max_dx_mm : float
             layer2_max_dx_mm : float
+            q_layer1         : float — layer 1 driving flux,
+                                       |q_rad_in| + |q_conv_in| (W/m^2)
+            q_layer2         : float — layer 2 driving flux,
+                                       |q_rad_out| + |q_conv_out| (W/m^2)
+
+        When the solve does not converge (``converged`` False) the sizes are
+        computed from the last iterate's fluxes: estimates, not results.
         """
+        require_positive("k_metal", k_metal, "W/m K")
+        require_positive("max_dt", max_dt, "K")
         result = cls.solve_temperatures(**kwargs)
 
         # Layer 1: driven by exhaust radiation + inner convection
@@ -386,5 +445,7 @@ class MultilayerShieldCalculator:
 
         result["layer1_max_dx_mm"] = (k_metal * max_dt / q1 * 1000.0) if q1 > 0 else float("inf")
         result["layer2_max_dx_mm"] = (k_metal * max_dt / q2 * 1000.0) if q2 > 0 else float("inf")
+        result["q_layer1"] = q1
+        result["q_layer2"] = q2
 
         return result

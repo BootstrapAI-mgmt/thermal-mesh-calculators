@@ -365,8 +365,9 @@ def solve_temperature(
 - `dict` with keys:
   - `t_shield_K` (float): Shield temperature (K)
   - `t_shield_C` (float): Shield temperature (°C)
-  - `converged` (bool): Whether solution converged
+  - `converged` (bool): Whether solution converged; when False, the other keys describe the last iterate
   - `iterations` (int): Number of iterations
+  - `residual_W_m2` (float): Energy-balance residual at `t_shield_K` (W/m²)
   - `q_rad_in` (float): Radiation from hot side (W/m²)
   - `q_rad_out` (float): Radiation to surroundings (W/m²)
   - `q_conv_in` (float): Convection from hot side (W/m²)
@@ -402,14 +403,14 @@ Calculates mesh constraints for shield temperature solution with material proper
 @staticmethod
 def mesh_size(
     k, max_dt, t_exh, t_fluid, t_surr, eps_in, eps_out,
-    h_in=None, h_out=None, h_total=None
+    h_in=None, h_out=None, h_total=None, tol=0.1, max_iter=50
 ) -> dict
 ```
 
 **Parameters:**
 - `k` (float): Material thermal conductivity (W/m·K)
-- `max_dt` (float): Maximum time step (s)
-- Additional parameters same as `solve_temperature()`
+- `max_dt` (float): Maximum temperature difference across one element (K)
+- Additional parameters same as `solve_temperature()`, including `tol` and `max_iter`, which are forwarded to it
 
 **Returns:**
 - `dict` with all keys from `solve_temperature()` plus:
@@ -447,7 +448,7 @@ Solves steady-state temperatures for both shield layers.
 def solve_temperatures(
     t_exh, t_fluid, t_surr, h_in, h_out, h_gap,
     eps_in, eps_out, eps_g1, eps_g2,
-    tol=0.1, max_iter=100
+    f12=1.0, tol=0.1, max_iter=100
 ) -> dict
 ```
 
@@ -462,7 +463,8 @@ def solve_temperatures(
 - `eps_out` (float): Outer layer cold-side emissivity
 - `eps_g1` (float): Inner layer gap-side emissivity
 - `eps_g2` (float): Outer layer gap-side emissivity
-- `tol` (float, default=0.1): Convergence tolerance (K)
+- `f12` (float, default=1.0): View factor between the gap faces (0–1; 1.0 is infinite parallel plates)
+- `tol` (float, default=0.1): Convergence tolerance on both energy balances (W/m²)
 - `max_iter` (int, default=100): Maximum iterations
 
 **Returns:**
@@ -472,10 +474,11 @@ def solve_temperatures(
   - `t2_K` (float): Outer layer temperature (K)
   - `t2_C` (float): Outer layer temperature (°C)
   - `delta_T_C` (float): Temperature difference (°C)
-  - `converged` (bool): Convergence status
+  - `converged` (bool): Convergence status; when False, the temperatures and fluxes are those of the last iterate
   - `iterations` (int): Iteration count
   - `eps_eff` (float): Effective emissivity
-  - All flux components (q_rad_in, q_rad_out, q_conv_in, q_conv_out, q_rad_gap_1, q_rad_gap_2, q_cond_gap)
+  - `residual_W_m2` (float): Larger of the two energy-balance residuals (W/m²)
+  - All six flux components (`q_rad_in`, `q_conv_in`, `q_gap_cond`, `q_gap_rad`, `q_rad_out`, `q_conv_out`)
 
 **Example:**
 ```python
@@ -511,13 +514,15 @@ def mesh_sizes(k_metal, max_dt, **kwargs) -> dict
 
 **Parameters:**
 - `k_metal` (float): Thermal conductivity (W/m·K)
-- `max_dt` (float): Maximum time step (s)
+- `max_dt` (float): Maximum temperature difference across one element (K)
 - `**kwargs`: All parameters for `solve_temperatures()`
 
 **Returns:**
 - `dict` with all keys from `solve_temperatures()` plus:
   - `layer1_max_dx_mm` (float): Maximum element size for layer 1 (mm)
   - `layer2_max_dx_mm` (float): Maximum element size for layer 2 (mm)
+  - `q_layer1` (float): Layer 1 driving flux, `|q_rad_in| + |q_conv_in|` (W/m²)
+  - `q_layer2` (float): Layer 2 driving flux, `|q_rad_out| + |q_conv_out|` (W/m²)
 
 **Example:**
 ```python
@@ -595,7 +600,7 @@ def penetration_depth(k, rho, cp, dt, safety_factor=1.0) -> dict
 - `rho` (float): Density (kg/m³)
 - `cp` (float): Specific heat (J/kg·K)
 - `dt` (float): Time step (s)
-- `safety_factor` (float, default=1.0): Safety margin (>1 is more conservative)
+- `safety_factor` (float, default=1.0): Multiplier C on √(α·dt): a resolution guideline for implicit schemes (1.5–2.0). A larger C allows a coarser element; it is not a stability limit
 
 **Returns:**
 - `dict` with keys:
@@ -694,9 +699,9 @@ Computes all transient constraints and recommends element size.
 
 **Signature:**
 ```python
-@staticmethod
+@classmethod
 def combined_transient_limits(
-    k, rho, cp, dt, fo_max=0.5, safety_factor=1.0, tau_bc=None
+    k, rho, cp, dt, fo_max=0.5, safety_factor=1.0, tau_bc=None, scheme=None
 ) -> dict
 ```
 
@@ -706,17 +711,24 @@ def combined_transient_limits(
 - `cp` (float): Specific heat (J/kg·K)
 - `dt` (float): Time step (s)
 - `fo_max` (float, default=0.5): Maximum Fourier number
-- `safety_factor` (float, default=1.0): Safety margin
+- `safety_factor` (float, default=1.0): Penetration-depth multiplier C, applied to implicit schemes only
 - `tau_bc` (float, optional): Boundary condition time scale (s)
+- `scheme` (str, optional): `"explicit"` or `"implicit"`; `None` infers it from `fo_max` (≤ 0.5 is explicit)
 
 **Returns:**
 - `dict` with keys:
   - `alpha` (float): Thermal diffusivity (m²/s)
+  - `scheme` (str): `"explicit"` or `"implicit"`
   - `penetration_max_dx_mm` (float): Limit from penetration depth
-  - `fourier_min_dx_mm` (float): Limit from Fourier number
+  - `penetration_applied` (bool): False for an explicit scheme (see `docs/math_derivations.md` §7.4)
+  - `fourier_min_dx_mm` (float): Limit from Fourier number (a lower bound)
   - `drive_cycle_max_dx_mm` (float): Limit from time scale (if tau_bc given)
-  - `recommended_dx_mm` (float): Conservative intersection of all limits
-  - `binding_constraint` (str): Which constraint is most restrictive
+  - `max_dx_mm` (float): Tightest applicable upper bound (`inf` when none applies)
+  - `feasible` (bool): `fourier_min_dx_mm <= max_dx_mm`
+  - `recommended_dx_mm` (float): `max_dx_mm` when feasible, else `fourier_min_dx_mm`
+  - `binding_constraint` (str): `"penetration_depth"`, `"drive_cycle"`, `"none"`, or a `"fourier_... (WARNING: ...)"` conflict label
+  - `conflict` (dict or None): `message` and `remedies`, every parameter change the conflict needs (`dt` maximum, or `safety_factor` minimum). `remedies` holds the exact values; the message prints each bound rounded toward the side that satisfies it, so the printed value closes the conflict too
+  - `advice` (str): The result in words
 
 **Example:**
 ```python
@@ -923,6 +935,9 @@ def air_properties(t_film: float) -> dict
   - `Pr` (float): Prandtl number
   - `beta` (float): Volumetric expansion coefficient (1/K)
   - `rho` (float): Density (kg/m³)
+  - `t_film_K` (float): The film temperature given (K)
+  - `t_eval_K` (float): The temperature the fits were evaluated at: `t_film` clamped to `AIR_PROPERTY_RANGE_K` (250–700 K)
+  - `in_range` (bool): False when the properties are extrapolated
 
 **Example:**
 ```python
@@ -1089,6 +1104,8 @@ def estimate_h(
   - `Re` (float): Reynolds number
   - `dominant_mode` (str): "forced", "mixed", or "natural"
   - `solver_advisory` (dict): Solver recommendations
+  - `t_film_K` (float): Film temperature (K)
+  - `film_in_range` (bool): False when the air properties behind h were extrapolated
 
 **Example:**
 ```python

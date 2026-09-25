@@ -631,20 +631,19 @@ By dimensional analysis, a thermal disturbance propagates a distance:
 δ ~ √(α · dt)
 ```
 
-in one time step `dt`. If the mesh element is much larger than δ, the solver
-cannot resolve the thermal wavefront, causing numerical oscillations
-(explicit) or excessive smearing (implicit).
-
-The mesh constraint is:
+in one time step `dt`. In an implicit scheme, whose stability places no
+limit on `dt`, an element much larger than δ cannot resolve the thermal
+wavefront within a step and smears it. The resolution guideline is:
 
 ```
-Δx_max ≤ C · √(α · dt)
+Δx_max ≤ C · √(α · dt),    C ≈ 1.5–2.0   (implicit schemes)
 ```
 
-where C = 1.0 for explicit solvers (hard stability limit) and C = 1.5–2.0
-for implicit solvers (resolution guideline).
+In Fourier-number form (§7.2) this reads `Fo = α·dt/Δx² ≥ 1/C²`: a **lower**
+bound on Fo. It is not a stability limit, and it is not applied to explicit
+schemes (§7.4 shows why it cannot be).
 
-**Implementation:** `transient.py` lines 111–113:
+**Implementation:** `transient.py`, `penetration_depth()`:
 ```python
 alpha = k / (rho * cp)
 pen = math.sqrt(alpha * dt)
@@ -680,7 +679,7 @@ directions simultaneously; with uniform mesh spacing, each direction
 contributes Fo/3, and the effective 1D Fourier number in any direction
 must satisfy Fo_1D ≤ 0.5.
 
-**Implementation:** `transient.py` lines 156–157:
+**Implementation:** `transient.py`, `fourier_number_limit()`:
 ```python
 alpha = k / (rho * cp)
 min_dx_m = math.sqrt(alpha * dt / fo_max)
@@ -706,16 +705,71 @@ ensure the spatial field can represent the thermal state at each transition.
 
 ### 7.4 Combined Constraints
 
-All three constraints produce independent limits. The binding constraint
-(tightest) governs:
+The constraints bound the element from both sides:
 
 ```
-Δx ≥ Δx_min_Fourier         [lower bound: stability]
-Δx ≤ min(Δx_penetration, Δx_drive_cycle)  [upper bounds: resolution]
+Δx ≥ Δx_min,Fourier = √(α·dt / Fo_max)                 [lower bound]
+Δx ≤ Δx_drive_cycle  = √(α·τ_bc)                         [upper bound]
+Δx ≤ Δx_penetration  = C·√(α·dt)      (implicit only)   [upper bound]
 ```
 
-If `Δx_min_Fourier > min(upper bounds)`, the time-step is too large for
-the desired spatial resolution — the solver should reduce dt.
+The binding constraint is the tightest applicable upper bound, provided it
+is not below the Fourier minimum.
+
+**Why the penetration bound is not applied to explicit schemes.** The
+explicit (forward-Euler, lumped) update in 1D is
+
+```
+T_i^(n+1) = Fo·T_(i−1)^n + (1 − 2·Fo)·T_i^n + Fo·T_(i+1)^n
+```
+
+For Fo ≤ 1/2 its three weights are non-negative and sum to one: each new
+value is a weighted average of old ones, so the update creates no new
+extremum and cannot oscillate, however small Fo is. An element larger than
+the per-step penetration depth (Fo < 1) is the normal explicit regime: it
+costs steps, not accuracy. The upper bounds on an explicit scheme's
+element are the drive-cycle limit and the steady constraints (§2–§5).
+
+**The ratio that does not depend on dt.** Both √dt bounds scale alike:
+
+```
+Δx_min,Fourier / Δx_penetration = 1 / (C·√Fo_max)
+```
+
+so their window is non-empty only if `C²·Fo_max ≥ 1`, at every dt or at
+none. With C = 1, the explicit limits Fo_max = 1/2 and 1/6 give ratios of
+√2 ≈ 1.414 and √6 ≈ 2.449: applied to an explicit scheme, the penetration
+bound leaves no feasible element at any time step, and the advice "reduce
+dt" cannot change that. The implicit guideline pair C = 2, Fo_max = 5 gives
+`C²·Fo_max = 20`, a window from 0.447 to 2 × √(α·dt).
+
+**Remedies that change the result.**
+
+| Conflict | Remedy | Why it closes the conflict |
+|---|---|---|
+| Fourier minimum > drive-cycle bound | `dt ≤ Fo_max · τ_bc` | √(α·dt/Fo_max) ≤ √(α·τ_bc) ⇔ dt ≤ Fo_max·τ_bc, and the drive-cycle bound does not depend on dt |
+| Fourier minimum > governing size Δx_gov (batch) | `dt ≤ Fo_max · Δx_gov² / α` | the minimum scales with √dt and Δx_gov does not shrink with dt (an implicit penetration bound at the new dt is C·√Fo_max·Δx_gov ≥ Δx_gov when `C²·Fo_max ≥ 1`) |
+| Implicit, `C²·Fo_max < 1` | `C ≥ 1/√Fo_max`, or `Fo_max ≥ 1/C²` | the ratio above does not depend on dt, so no dt closes it |
+
+**Worked example.** `steel_mild` (k = 54, ρ = 7833, c_p = 465, so
+α = 1.4826 × 10⁻⁵ m²/s), explicit, Fo_max = 0.5:
+
+```
+dt = 0.01 s:  Δx ≥ 0.5445 mm
+dt = 1 s:     Δx ≥ 5.445 mm
+dt = 100 s:   Δx ≥ 54.45 mm
+```
+
+With no τ_bc no transient upper bound applies, and the steady constraints
+set the size. With τ_bc = 20 s the drive-cycle bound is √(α·20) = 17.22 mm,
+so dt = 100 s conflicts; the remedy dt ≤ 0.5 × 20 = 10 s brings the minimum
+down to exactly 17.22 mm.
+
+**Implementation:** `transient.py`, `combined_transient_limits()` (the
+window, `feasible`, and `conflict` with its `remedies`); `batch.py`,
+`process_part()`, which uses the transient upper bound as a size candidate
+and reports a Fourier minimum above the governing size as a
+`TRANSIENT_CONFLICT` warning carrying the dt remedy.
 
 ---
 

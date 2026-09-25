@@ -38,6 +38,7 @@ y+ considerations for CFD-coupled workflows:
 """
 
 import math
+from thermal_mesh_calculators._guards import require_non_negative, require_positive
 
 
 class ConvectionMeshCalculator:
@@ -72,7 +73,14 @@ class ConvectionMeshCalculator:
                                      (1 for shell, ceil(20*Bi) for solid,
                                       clamped to [2, 10])
             rationale     : str
+
+        Raises
+        ------
+        ValueError
+            k not > 0, or h < 0.
         """
+        require_positive("k", k, "W/m K")
+        require_non_negative("h", h, "W/m^2 K")
         lc = thickness / 2.0
         bi = (h * lc) / k
 

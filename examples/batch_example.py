@@ -94,7 +94,8 @@ def main():
             "thickness_mm": 3.5,
             "t_surf_K": 383.15,     # 110 C
             "char_length_mm": 250.0,
-            # No "surface" key → falls back to plastic default (eps=0.92)
+            # No "surface" key → non-metal fallback eps = 0.90, reported
+            # as a SURFACE_DEFAULTED warning
         },
         {
             "part_id": "FE-002 Charge Air Cooler Bracket",
