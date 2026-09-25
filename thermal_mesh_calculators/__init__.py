@@ -52,4 +52,4 @@ from thermal_mesh_calculators.h_estimator import (
     H_EXTERNAL_TYPICAL,
 )
 
-__version__ = "0.6.2"
+__version__ = "0.6.2.post1"

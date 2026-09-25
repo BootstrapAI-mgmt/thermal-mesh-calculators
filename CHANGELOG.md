@@ -9,6 +9,16 @@ Versions prior to `v0.6.0` were developed in-repo but never tagged or published;
 their dates below are the dates of the commit that completed the version. `v0.6.0`
 is the first release with a git tag, packaging metadata, and a buildable wheel.
 
+## [0.6.2.post1] — 2026-09-25
+
+Re-publication of 0.6.2 to PyPI. No library code changed: this tree is the `v0.6.2` tree plus
+this entry, the version string and the README's install lines.
+
+- **Changed:** the index files of 0.6.1 and 0.6.2 were removed from PyPI on 2026-09-25, and a removed
+  filename cannot be re-uploaded, so the same code ships again as the post-release `0.6.2.post1`
+  (`pip install thermal-mesh-calculators` resolves it; a `<0.7` pin still admits it). The README's
+  git-pin example now names `v0.6.2.post1`, the first tag of this repository after `v0.6.2`.
+
 ## [0.6.2] — 2026-09-17
 
 Packaging and publication release. No library code changed.
@@ -121,4 +131,5 @@ pinnable artifact. No calculator behaviour changed as part of the packaging work
   CFD mapping), radiation (T⁴ sensitivity, view-factor curvature), and the
   single-layer and multilayer Newton-Raphson heat-shield solvers.
 
+[0.6.2.post1]: https://github.com/BootstrapAI-mgmt/thermal-mesh-calculators/releases/tag/v0.6.2.post1
 [0.6.0]: https://github.com/BootstrapAI-mgmt/thermal-mesh-calculators/releases/tag/v0.6.0
