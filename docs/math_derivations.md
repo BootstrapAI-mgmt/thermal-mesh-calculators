@@ -72,7 +72,7 @@ q'' = h(T_s - T_∞) + εσ(T_s^4 - T_surr^4)
 All terms on the right-hand side are either known inputs (material properties,
 boundary conditions) or can be reasonably estimated (surface temperature).
 
-**Implementation:** `conduction.py` lines 94–96:
+**Implementation:** `BoundaryDrivenConductionCalculator.max_mesh_size()` in `conduction.py`:
 ```python
 q_conv = h * (t_surf - t_fluid)
 q_rad = epsilon * STEFAN_BOLTZMANN * (t_surf**4 - t_surr**4)
@@ -90,7 +90,7 @@ Substituting the energy balance into the discretized Fourier relation:
 This is the **key result**: mesh size depends only on material conductivity,
 the accuracy target ΔT_max, and boundary conditions that are known or estimatable.
 
-**Implementation:** `conduction.py` line 107:
+**Implementation:** `BoundaryDrivenConductionCalculator.max_mesh_size()` in `conduction.py`:
 ```python
 max_dx_m = (k * max_dt) / q_total
 ```
@@ -117,6 +117,80 @@ it by convection).
 
 **Physical Insight:** Radiation flux increases as T⁴, making fine
 discretization essential at high temperatures.
+
+### 1.6 Thickness-Aware Sizing — Cell Count and Biot Number
+
+`Δx_max` from §1.4 knows nothing about the part being sized. For a thin,
+conductive wall it can exceed the wall itself many times over: the second layer
+of the README's two-layer shield, about 1 mm of steel, gives 85.9 mm. A length
+larger than the wall is the relation reporting that the wall is thermally thin;
+it is not a cell size. Given the wall thickness `L`, the cell count follows by
+clamping:
+
+```
+N_cells = max(1, ⌈L / Δx_max⌉)        (capped at max_cells, default 100)
+Δx_used = L / N_cells
+```
+
+**The count is a Biot-number screen.** With `q''` the net surface flux of §1.3,
+the drop across the wall implied by that flux, an effective coefficient that
+lumps convection and radiation against the fluid temperature, and the Biot
+number built on it are
+
+```
+ΔT_wall = |q''| · L / k
+h_eff   = |q''| / (T_s − T_∞)
+Bi      = h_eff · L / k
+```
+
+so `ΔT_wall = Bi · (T_s − T_∞)`, and since `L / Δx_max = |q''| · L / (k · ΔT_max)`,
+
+```
+N_cells = ⌈ΔT_wall / ΔT_max⌉ = ⌈Bi · (T_s − T_∞) / ΔT_max⌉
+```
+
+The cell count is the Biot number scaled by the driving difference over the
+per-element tolerance. It decides which solids need through-thickness
+resolution; it is not an error estimator, because under the 1-D steady
+assumptions of §1.1 the profile across the wall is linear and one cell
+represents it exactly. `L` is the whole wall thickness here, where the Biot
+number of §2 uses the half-thickness `L_c`. Through its radiation part `h_eff`
+grows roughly as `T_s³`, so `Bi` is not a constant of the part.
+
+| Bi | `regime` | Recommendation |
+|---|---|---|
+| Bi < 0.1 | `thermally_thin` | Shell conduction or a lumped region |
+| 0.1 ≤ Bi < 1 | `resolve` | `N_cells` cells through the wall |
+| Bi ≥ 1 | `steep_gradient` | Resolve, and check that the 1-D steady assumption still holds |
+
+**Zero-flux pole.** `Δx_max` diverges where convection and radiation cancel
+(`q''_conv + q''_rad → 0`, a warm part inside a hotter enclosure, say). The part
+is then near equilibrium, and the physics has no singularity there. When
+
+```
+|q''_conv + q''_rad| < 0.02 · max(|q''_conv|, |q''_rad|)
+```
+
+the result is one cell, regime `near_equilibrium`, with a warning to size the
+region geometrically or from the transient.
+
+**Consistency check.** If the implied drop exceeds the driving difference,
+`ΔT_wall > |T_s − T_∞|` (that is, `|Bi| > 1`), the assumed flux cannot cross the
+wall: the wall's resistance dominates, and `T_s` cannot be prescribed
+independently of it. The result then carries a "physically inconsistent"
+warning: solve the wall and its surface condition together.
+
+**Sign.** `h_eff` and `Bi` carry the sign of `T_s − T_∞`. For a wall colder than
+its fluid both are negative, and the regime screen then reports
+`thermally_thin` whatever the wall; judge such a wall by `|Bi|`.
+
+**Implementation:** `BoundaryDrivenConductionCalculator.size_wall()` in
+`conduction.py`. The README's exhaust manifold (k = 45 W/m·K, h = 150 W/m²·K,
+T_s = 1073.15 K, T_∞ = T_surr = 353.15 K, ε = 0.85, ΔT_max = 10 K) on a 4 mm
+wall: `Δx_max` = 2.63 mm, `N_cells` = 2, `Bi` = 0.021, thermally thin. Its
+glass-filled nylon intake (k = 0.25 W/m·K, h = 40 W/m²·K, T_s = 393.15 K,
+T_∞ = T_surr = 353.15 K, ε = 0.92, ΔT_max = 5 K) on a 3 mm wall: `N_cells` = 5,
+`Bi` = 0.61, `ΔT_wall` = 24.4 K, resolve.
 
 ---
 
@@ -1554,6 +1628,13 @@ All constraints from Sections 1–14:
 **Conduction (boundary-driven):**
 ```
 dx_max = k · ΔT_max / |q''_conv + q''_rad|
+```
+
+**Thickness-aware sizing (cell count and Biot number, §1.6):**
+```
+N_cells = max(1, ⌈L / dx_max⌉) = ⌈Bi · (T_s − T_∞) / ΔT_max⌉
+Bi = h_eff · L / k;  h_eff = |q''| / (T_s − T_∞)
+Bi < 0.1: thermally thin;  0.1 ≤ Bi < 1: resolve;  Bi ≥ 1: steep gradient
 ```
 
 **Fin theory (lateral gradient):**

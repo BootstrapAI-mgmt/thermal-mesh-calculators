@@ -67,11 +67,12 @@ class ConvectionMeshCalculator:
         Returns
         -------
         dict with keys:
-            biot          : float  — Biot number
+            biot          : float  — Biot number, h * (thickness / 2) / k
             mesh_type     : str    — "2D Shell" or "3D Solid"
-            min_elements  : int    — minimum elements through thickness
-                                     (1 for shell, ceil(20*Bi) for solid,
-                                      clamped to [2, 10])
+            min_elements_through_thickness : int
+                          — minimum elements through thickness
+                            (1 for shell, ceil(20*Bi) for solid,
+                            clamped to [2, 10])
             rationale     : str
 
         Raises

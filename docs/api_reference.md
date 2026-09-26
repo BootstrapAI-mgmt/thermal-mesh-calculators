@@ -63,7 +63,7 @@ def max_mesh_size(k, h, t_surf, t_fluid, epsilon, t_surr, max_dt) -> dict
 - `t_fluid` (float): Fluid temperature (K)
 - `epsilon` (float): Emissivity (0–1)
 - `t_surr` (float): Surroundings temperature (K)
-- `max_dt` (float): Maximum time step (s)
+- `max_dt` (float): Maximum allowable temperature drop across one element (K), the accuracy target
 
 **Returns:**
 - `dict` with keys:
@@ -78,17 +78,74 @@ def max_mesh_size(k, h, t_surf, t_fluid, epsilon, t_surr, max_dt) -> dict
 from thermal_mesh_calculators.conduction import BoundaryDrivenConductionCalculator
 
 result = BoundaryDrivenConductionCalculator.max_mesh_size(
-    k=50.0,              # W/m·K (stainless steel)
+    k=50.0,              # W/m·K (carbon steel)
     h=75.0,              # W/m²·K
     t_surf=873.15,       # K (600°C)
     t_fluid=343.15,      # K (70°C)
     epsilon=0.7,
     t_surr=343.15,       # K (70°C)
-    max_dt=0.1           # s
+    max_dt=10.0          # K, allowable drop per element
 )
 
 print(f"Max element size: {result['max_dx_mm']:.2f} mm")
 print(f"Heat flux: {result['q_total']:.1f} W/m² ({result['rad_fraction']*100:.1f}% radiation)")
+```
+
+#### size_wall()
+
+Thickness-aware sizing: the through-thickness cell count and the Biot number of a
+wall, rather than a raw length. `max_mesh_size()` knows nothing about the part it
+sizes, and for a thin, conductive wall its `max_dx_mm` can exceed the wall itself:
+that is the relation reporting "thermally thin", not a cell size. `size_wall()`
+clamps against the wall thickness and leads with the cell count and the Biot
+number. The derivation is in [`math_derivations.md` §1.6](math_derivations.md).
+
+**Signature:**
+```python
+@staticmethod
+def size_wall(k, h, t_surf, t_fluid, epsilon, t_surr, max_dt, thickness_m, max_cells=100) -> dict
+```
+
+**Parameters:**
+- `k`, `h`, `t_surf`, `t_fluid`, `epsilon`, `t_surr`, `max_dt`: as for `max_mesh_size()`
+- `thickness_m` (float): Wall thickness (m); required
+- `max_cells` (int, default 100): Cap on the reported cell count
+
+**Returns:**
+- `dict` with keys:
+  - `n_cells` (int): Cells through the wall, `max(1, ceil(thickness / raw dx))`, capped at `max_cells`
+  - `biot` (float): `h_effective * thickness / k` (infinite when `t_surf == t_fluid`)
+  - `regime` (str): `"thermally_thin"` (Bi < 0.1), `"resolve"` (0.1 ≤ Bi < 1), `"steep_gradient"` (Bi ≥ 1), or `"near_equilibrium"` when convection and radiation cancel (then one cell, and `biot` is 0)
+  - `dx_used_mm` (float): `thickness / n_cells` (mm)
+  - `dx_raw_mm` (float): The unclamped `max_mesh_size()` length (mm), for traceability
+  - `dx_exceeds_part` (bool): Whether the raw length exceeds the wall
+  - `dt_wall_K` (float): Temperature drop across the wall implied by the surface flux (K)
+  - `h_effective` (float): Net surface flux divided by `t_surf - t_fluid` (W/m²·K), radiation included
+  - `q_conv`, `q_rad`, `q_total`, `rad_fraction`: as for `max_mesh_size()`
+  - `recommendation` (str): The modelling decision, in words
+  - `warnings` (list of str): Near equilibrium; the cell cap reached; `t_surf == t_fluid`; the raw length exceeding the wall; physically inconsistent (the implied drop exceeds `t_surf - t_fluid`, so the surface temperature cannot be prescribed independently of the wall); radiation carrying more than 60 % of the flux
+
+`biot` uses the whole wall thickness, where `ConvectionMeshCalculator.biot_number()`
+uses half of it, and includes radiation. It carries the sign of `t_surf - t_fluid`:
+for a wall colder than its fluid it is negative and `regime` reads
+`"thermally_thin"` whatever the wall, so judge such a wall by `abs(biot)`.
+
+**Raises:**
+- `ValueError`: `thickness_m`, `k` or `max_dt` not > 0, or any input `max_mesh_size()` rejects
+
+**Example:**
+```python
+from thermal_mesh_calculators.conduction import BoundaryDrivenConductionCalculator
+
+sized = BoundaryDrivenConductionCalculator.size_wall(
+    k=0.25, h=40.0,                  # glass-filled nylon intake manifold
+    t_surf=393.15, t_fluid=353.15,   # K (120°C surface, 80°C air)
+    epsilon=0.92, t_surr=353.15,     # K
+    max_dt=5.0,                      # K per element
+    thickness_m=0.003,               # m (3 mm wall)
+)
+print(sized["n_cells"], sized["regime"], round(sized["biot"], 2))
+# 5 resolve 0.61
 ```
 
 #### transient_penetration_depth()
@@ -148,9 +205,9 @@ def biot_number(h, k, thickness) -> dict
 
 **Returns:**
 - `dict` with keys:
-  - `biot` (float): Biot number (dimensionless)
-  - `mesh_type` (str): "lumped", "moderate", or "distributed"
-  - `min_elements_through_thickness` (int): Recommended minimum elements
+  - `biot` (float): Biot number `h · (thickness / 2) / k` (dimensionless)
+  - `mesh_type` (str): `"2D Shell"` (Bi < 0.1) or `"3D Solid"`
+  - `min_elements_through_thickness` (int): 1 for a shell; `ceil(20 · Bi)` clamped to [2, 10] for a solid
   - `rationale` (str): Explanation of mesh type classification
 
 **Example:**
@@ -159,7 +216,7 @@ from thermal_mesh_calculators.convection import ConvectionMeshCalculator
 
 result = ConvectionMeshCalculator.biot_number(
     h=100.0,               # W/m²·K
-    k=50.0,                # W/m·K (stainless steel)
+    k=50.0,                # W/m·K (carbon steel)
     thickness=0.001        # m (1 mm)
 )
 
@@ -1335,7 +1392,9 @@ print(f"Available treatments: {len(treatments)}")
 
 ### process_part()
 
-Analyzes a single part with all thermal constraints.
+Runs every applicable calculator for one part and returns the governing (smallest)
+element size. The module docstring of `thermal_mesh_calculators.batch` lists every
+key a part or project may carry.
 
 **Signature:**
 ```python
@@ -1344,69 +1403,54 @@ def process_part(part: dict, project: dict) -> dict
 
 **Parameters:**
 
-`part` dict must contain:
-- `id` (str): Part identifier
-- `material` (str): Material name (from MATERIALS)
-- `component_class` (str): "structural", "internal", or "external"
-- `thickness_mm` (float): Material thickness
-- `characteristic_length_mm` (float): Size for convection
-- `zone` (str): Convection zone (from zones module)
+`part` dict, required keys:
+- `part_id` (str): Part identifier
+- `material` (str): A key of `MATERIALS`
+- `component_class` (str): `"exhaust"`, `"exhaust_adjacent"`, `"structural"`, `"shield"` or `"multilayer_shield"` (the keys of `CLASS_DEFAULTS`)
+- `convection_zone` (str): A key of `CONVECTION_ZONES`; shields may give `convection_zone_in` and `convection_zone_out` instead
+- `thickness_mm` (float): Wall thickness (mm)
+- `t_surf_K` (float): Surface temperature (K); ignored for the shield classes, whose temperature is solved
 
-`project` dict must contain:
-- `t_exh_K` (float): Exhaust/hot-side temp
-- `t_fluid_K` (float): Coolant/cold-side temp
-- `t_surr_K` (float): Surroundings temp
-- `epsilon_in` (float): Hot-side emissivity
-- `epsilon_out` (float): Cold-side emissivity
-- `h_in` (float, optional): Override hot-side h
-- `h_out` (float, optional): Override cold-side h
-- `max_dt` (float): Max time step (s)
+`part` dict, surface keys: `surface` (a key of `SURFACE_TREATMENTS`) or `epsilon` for the non-shield classes; `surface_in` / `eps_in` and `surface_out` / `eps_out` for shields; `surface_g1` / `eps_g1` and `surface_g2` / `eps_g2` for the gap faces of a two-layer shield. A surface given neither falls back to a material-class emissivity and is reported as a `SURFACE_DEFAULTED` warning.
+
+`part` dict, optional keys (among others): `h_override`, `h_in_override`, `h_out_override`, `char_length_mm` (default 100), `t_fluid_K` (this part's fluid temperature), `t_exh_K`, `h_gap`, `f12`, `shield_max_iter`.
+
+`project` dict: `t_fluid_K` and `t_surr_K` (K); optionally `max_dt` (K per element), `dt`, `fo_max`, `tau_bc`, `safety_factor`, `transient_scheme`, `allowable_flux_error`, `t_exh_K`, `shield_max_iter`.
 
 **Returns:**
 - `dict` with keys:
-  - `part_id` (str): Part identifier
-  - `material` (str): Material used
-  - `component_class` (str): Classification
-  - `h_used` (dict): Convection values used
-  - `h_estimation` (dict): Full h estimation data
-  - `solver_advisory` (dict): Solver recommendations
-  - `warnings` (list): Any issues encountered
-  - `conduction` (dict): Conduction analysis
-  - `biot` (dict): Biot number analysis
-  - `radiation` (dict): Radiation mesh limits
-  - `shield` (dict): Shield temperature solution
-  - `transient` (dict): Transient mesh constraints
-  - `governing_dx_mm` (float): Most restrictive element size
-  - `governing_constraint` (str): Which constraint is binding
-  - `all_constraints` (dict): All mesh constraints
+  - `part_id`, `material`, `component_class`: echoed back
+  - `t_fluid_K` (float), `t_fluid_source` (str): the fluid temperature used for h and q″, and `"part"` or `"project"`
+  - `h_used`, `eps_used`: the h (W/m²·K) and emissivity used; for shields, a dict per face
+  - `h_estimation` (dict): The h estimate (`h`, `method`, `regime`, `details`); `None` for shields
+  - `solver_advisory` (dict): Steady-state vs. transient advice; `None` for shields
+  - `conduction`, `biot`, `radiation`, `lateral`, `shield`, `transient` (dict or `None`): Each calculator's result
+  - `governing_dx_mm` (float): The most restrictive element size (mm)
+  - `governing_constraint` (str): The constraint that produced it
+  - `all_constraints` (list): Every candidate as `{"dx_mm": ..., "source": ...}`
+  - `warnings` (list): Coded warnings, each with `code`, `severity` and `message` (input warnings also carry `key`)
+
+**Raises:**
+- `PartInputError` (a `KeyError` and a `ValueError`): before anything is computed, for a missing or unknown material, component class or convection zone, or an unknown surface treatment; the message names the part, the key and the allowed set
 
 **Example:**
 ```python
 from thermal_mesh_calculators.batch import process_part
 
 part = {
-    'id': 'exhaust_shield_001',
-    'material': 'stainless_316',
-    'component_class': 'structural',
-    'thickness_mm': 1.0,
-    'characteristic_length_mm': 100.0,
-    'zone': 'exhaust_pipe'
+    "part_id": "BRK-001",
+    "material": "steel_mild",
+    "component_class": "structural",
+    "convection_zone": "engine_beside",
+    "thickness_mm": 3.0,
+    "t_surf_K": 473.15,
+    "surface": "painted",
 }
-
-project = {
-    't_exh_K': 873.15,
-    't_fluid_K': 343.15,
-    't_surr_K': 343.15,
-    'epsilon_in': 0.8,
-    'epsilon_out': 0.8,
-    'max_dt': 0.1
-}
+project = {"t_fluid_K": 353.15, "t_surr_K": 353.15}
 
 result = process_part(part, project)
-
-print(f"Part: {result['part_id']}")
-print(f"Max element: {result['governing_dx_mm']:.2f} mm")
-print(f"Constraint: {result['governing_constraint']}")
+print(f"{result['part_id']}: {result['governing_dx_mm']:.1f} mm ({result['governing_constraint']})")
+# BRK-001: 24.5 mm (lateral_gradient)
 ```
 
 ### process_batch()

@@ -1,12 +1,16 @@
-.PHONY: examples test lint clean
+.PHONY: examples test doctest lint clean
 
 # Run all worked examples
 examples:
 	python -m examples.automotive_examples
 
-# Run tests (when they exist)
+# Run the test suite
 test:
 	python -m pytest tests/ -v
+
+# Run the README's examples as doctests, as CI does
+doctest:
+	python -m pytest --doctest-glob=README.md README.md
 
 # Basic lint check
 lint:

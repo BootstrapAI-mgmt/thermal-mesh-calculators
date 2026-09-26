@@ -33,6 +33,7 @@ examples/
 analysis/
     regime_crossover_study.py   # Parametric study: conduction vs convection dominance thresholds
     offroad_regime_study.py     # Off-road 10 mph study: laminar/turbulent/mixed regime mapping
+    exhaust_underbody_scenario.py # Off-road underbody exhaust: pipe and cargo shields, cargo bed
 tests/
     test_conduction.py          # 14 tests (incl. lateral gradient)
     test_convection.py          # 12 tests (incl. cell Biot 20x)

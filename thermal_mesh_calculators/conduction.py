@@ -30,14 +30,18 @@ Notes for automotive workflows:
     - Heat shields are the main floating unknown; use the shield solvers
       in shields.py for those.
 
-Transient extension (future):
-    For transient problems the thermal penetration depth provides an
-    additional constraint:
+Transient problems:
+    The thermal penetration depth bounds the element size one time step
+    dt can resolve:
 
         dx <= sqrt(alpha * dt)
 
-    where alpha = k / (rho * cp) is the thermal diffusivity and dt is
-    the time-step.  This will be added in a later revision.
+    where alpha = k / (rho * cp) is the thermal diffusivity.
+    BoundaryDrivenConductionCalculator.transient_penetration_depth()
+    returns this bound.  The full set of transient constraints (the
+    penetration depth, a resolution guideline for implicit schemes; the
+    Fourier-number limit; the drive-cycle limit) is in transient.py,
+    TransientMeshCalculator.
 """
 
 import math

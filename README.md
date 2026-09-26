@@ -33,7 +33,7 @@ All terms on the right are either known inputs (material props, BCs) or can be e
 - **CFD mapping limit**: max solid element size to avoid interpolation loss when mapping wall data from CFD
 
 ### `radiation.py` — T^4 Sensitivity & View Factors
-- Flux sensitivity calculator (`dq/dT = 4*eps*sigma*T^3`) — shows the 120x increase in sensitivity from 300 K to 1000 K
+- Flux sensitivity calculator (`dq/dT = 4*eps*sigma*T^3`) — shows the 37x increase in sensitivity from 300 K to 1000 K (T^3 scaling; the flux itself, T^4, grows about 123x)
 - Element size bound from linearisation error tolerance
 - Curvature-based view factor limit: max facet size on curved surfaces to prevent artificial hot/cold spots
 
@@ -85,57 +85,81 @@ from the repository root.
 
 ## Quick Start
 
-```python
-from thermal_mesh_calculators import (
-    BoundaryDrivenConductionCalculator,
-    ConvectionMeshCalculator,
-    RadiationMeshCalculator,
-    SingleLayerShieldCalculator,
-    MultilayerShieldCalculator,
-)
+The examples below run as doctests in CI (`python -m pytest --doctest-glob=README.md README.md`),
+so every number shown is what the package returns.
 
-# Exhaust manifold — fixed surface temp at 800 C
-cond = BoundaryDrivenConductionCalculator()
-result = cond.max_mesh_size(
-    k=45.0, h=150.0, t_surf=1073.15, t_fluid=353.15,
-    epsilon=0.85, t_surr=353.15, max_dt=10.0,
-)
-print(f"Max element size: {result['max_dx_mm']:.2f} mm")
-# -> 2.63 mm
+<!-- Each pycon block ends with a blank line: without it, doctest reads the
+     closing fence as part of the expected output. -->
 
-# v0.6.0 — thickness-aware reporting: cell count + Biot number, never a raw
-# length. The raw relation above knows nothing about the part it is sizing;
-# size_wall clamps against the actual wall and reports the modelling decision.
-sized = cond.size_wall(
-    k=45.0, h=150.0, t_surf=1073.15, t_fluid=353.15,
-    epsilon=0.85, t_surr=353.15, max_dt=10.0,
-    thickness_m=0.004,  # 4 mm cast wall
-)
-print(f"{sized['n_cells']} cell(s), Bi = {sized['biot']:.3f} -> {sized['regime']}")
-# -> 2 cell(s), Bi = 0.021 -> thermally_thin  (use shell conduction)
+```pycon
+>>> from thermal_mesh_calculators import (
+...     BoundaryDrivenConductionCalculator,
+...     ConvectionMeshCalculator,
+...     RadiationMeshCalculator,
+...     SingleLayerShieldCalculator,
+...     MultilayerShieldCalculator,
+... )
 
-# Dual-wall heat shield
-multi = MultilayerShieldCalculator()
-m = multi.mesh_sizes(
-    k_metal=45.0, max_dt=15.0,
-    t_exh=1073.15, t_fluid=353.15, t_surr=353.15,
-    h_in=30.0, h_out=30.0, h_gap=15.0,
-    eps_in=0.4, eps_out=0.4, eps_g1=0.4, eps_g2=0.4,
-)
-print(f"Layer 1: {m['t1_C']:.0f} C -> {m['layer1_max_dx_mm']:.1f} mm")
-print(f"Layer 2: {m['t2_C']:.0f} C -> {m['layer2_max_dx_mm']:.1f} mm")
-# -> Layer 1: 521 C -> 19.7 mm
-# -> Layer 2: 282 C -> 85.9 mm (4.4x coarser)
+```
+
+An exhaust manifold, its surface temperature fixed at 800 C:
+
+```pycon
+>>> cond = BoundaryDrivenConductionCalculator()
+>>> result = cond.max_mesh_size(
+...     k=45.0, h=150.0, t_surf=1073.15, t_fluid=353.15,
+...     epsilon=0.85, t_surr=353.15, max_dt=10.0,
+... )
+>>> print(f"Max element size: {result['max_dx_mm']:.2f} mm")
+Max element size: 2.63 mm
+
+```
+
+Thickness-aware reporting (v0.6.0): a cell count and a Biot number, never a raw
+length. The raw relation above knows nothing about the part it is sizing;
+`size_wall` clamps against the actual wall, here a 4 mm cast wall, and reports
+the modelling decision (thermally thin: use shell conduction):
+
+```pycon
+>>> sized = cond.size_wall(
+...     k=45.0, h=150.0, t_surf=1073.15, t_fluid=353.15,
+...     epsilon=0.85, t_surr=353.15, max_dt=10.0,
+...     thickness_m=0.004,
+... )
+>>> print(f"{sized['n_cells']} cell(s), Bi = {sized['biot']:.3f} -> {sized['regime']}")
+2 cell(s), Bi = 0.021 -> thermally_thin
+
+```
+
+A dual-wall heat shield:
+
+```pycon
+>>> multi = MultilayerShieldCalculator()
+>>> m = multi.mesh_sizes(
+...     k_metal=45.0, max_dt=15.0,
+...     t_exh=1073.15, t_fluid=353.15, t_surr=353.15,
+...     h_in=30.0, h_out=30.0, h_gap=15.0,
+...     eps_in=0.4, eps_out=0.4, eps_g1=0.4, eps_g2=0.4,
+... )
+>>> print(f"Layer 1: {m['t1_C']:.0f} C -> {m['layer1_max_dx_mm']:.1f} mm")
+Layer 1: 521 C -> 19.7 mm
+>>> print(f"Layer 2: {m['t2_C']:.0f} C -> {m['layer2_max_dx_mm']:.1f} mm")
+Layer 2: 282 C -> 85.9 mm
+>>> print(f"Layer 2 can be {m['layer2_max_dx_mm'] / m['layer1_max_dx_mm']:.1f}x coarser")
+Layer 2 can be 4.4x coarser
+
 ```
 
 ## Example Output
 
-Run `python -m examples.automotive_examples` for a full walkthrough covering:
+Run `python -m examples.automotive_examples` for a full walkthrough. It prints the
+raw `dx_max` column; the second column applies `size_wall` to the same case at the
+wall thickness shown:
 
 | Scenario | Raw `dx_max` | Thickness-aware (`size_wall`, v0.6.0) |
 |---|---|---|
 | Steel exhaust manifold (800 C, ~4 mm wall) | 2.6 mm | 2 cells — **thermally thin** (Bi ≈ 0.02): shell conduction |
-| Plastic intake manifold (120 C, ~3 mm wall) | 0.6 mm | **5 cells — resolve** (Bi ≈ 0.25, ΔT_wall ≈ 24 K) |
+| Plastic intake manifold (120 C, ~3 mm wall) | 0.6 mm | **5 cells — resolve** (Bi ≈ 0.61, ΔT_wall ≈ 24 K) |
 | Single-layer aluminised shield (~1 mm) | 19.3 mm | 1 cell — thermally thin |
 | Multilayer shield, Layer 1 (~1 mm) | 19.7 mm | 1 cell — thermally thin (Bi ≈ 0.001) |
 | Multilayer shield, Layer 2 (~1 mm) | 85.9 mm | 1 cell — thermally thin (Bi ≈ 0.0002) |
