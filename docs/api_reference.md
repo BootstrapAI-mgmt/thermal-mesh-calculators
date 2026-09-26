@@ -1428,9 +1428,11 @@ def process_part(part: dict, project: dict) -> dict
   - `part_id`, `material`, `component_class`: echoed back
   - `t_fluid_K` (float), `t_fluid_source` (str): the fluid temperature used for h and q″, and `"part"` or `"project"`
   - `h_used`, `eps_used`: the h (W/m²·K) and emissivity used; for shields, a dict per face
-  - `h_estimation` (dict): The h estimate (`h`, `method`, `regime`, `details`); `None` for shields
-  - `solver_advisory` (dict): Steady-state vs. transient advice; `None` for shields
-  - `conduction`, `biot`, `radiation`, `lateral`, `shield`, `transient` (dict or `None`): Each calculator's result
+  - `h_estimation` (dict): The h estimate (`h`, `method`, `regime`, `details`); absent for the shield classes
+  - `solver_advisory` (dict): Steady-state vs. transient advice; `None` for the shield classes
+  - `conduction`, `biot`, `radiation`, `shield`, `transient` (dict or `None`): Each calculator's result
+  - `lateral` (dict): The fin-theory lateral limit; absent for the shield classes
+  - `f12_used` (float): Two-layer shields only, the gap view factor used
   - `governing_dx_mm` (float): The most restrictive element size (mm)
   - `governing_constraint` (str): The constraint that produced it
   - `all_constraints` (list): Every candidate as `{"dx_mm": ..., "source": ...}`
