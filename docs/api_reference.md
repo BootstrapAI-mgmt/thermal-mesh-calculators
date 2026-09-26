@@ -342,7 +342,7 @@ def max_mesh_size(t_local, emissivity, allowable_flux_error, spatial_gradient) -
 - `dict` with keys:
   - `max_dx_mm` (float): Maximum element size (mm)
   - `dq_dt` (float): Flux sensitivity (W/m²·K)
-  - `max_dt_element` (float): Maximum time step for element (s)
+  - `max_dt_element` (float): Largest temperature difference across one element (K) that keeps the flux error within `allowable_flux_error`
 
 **Example:**
 ```python
@@ -477,8 +477,8 @@ def mesh_size(
 **Example:**
 ```python
 result = SingleLayerShieldCalculator.mesh_size(
-    k=50.0,            # W/m·K (stainless steel)
-    max_dt=0.1,        # s
+    k=50.0,            # W/m·K (carbon steel)
+    max_dt=10.0,       # K per element
     t_exh=873.15,
     t_fluid=343.15,
     t_surr=343.15,
@@ -1266,42 +1266,42 @@ Batch processing for complete part analysis and materials database.
 
 ### MATERIALS
 
-Dictionary of 44 materials with properties.
+Dictionary of 43 materials, keyed by name. `list_materials()` returns every name, and
+[`quick_reference.md`](quick_reference.md) lists them by category.
 
-Keys include: steel_301, aluminum_6061, titanium_grade2, nickel, copper, stainless_304, stainless_316, stainless_321, superalloy_inconel_718, and 35 others.
+Keys include: `steel_mild`, `steel_stainless_304`, `steel_stainless_409`, `aluminium_6061`, `cast_iron`, `copper`, `titanium_6al4v`, `nickel_alloy`, `plastic_pa66_gf30`, `rubber_epdm`.
 
 **Each entry contains:**
 - `k` (float): Thermal conductivity (W/m·K)
 - `rho` (float): Density (kg/m³)
 - `cp` (float): Specific heat (J/kg·K)
-- `common_name` (str): Human-readable name
-- `temp_range_C` (tuple): Applicable temperature range
+- `description` (str): Human-readable name
 
 **Example:**
 ```python
 from thermal_mesh_calculators.batch import MATERIALS
 
-steel = MATERIALS['stainless_316']
+steel = MATERIALS['steel_stainless_304']
 print(f"Conductivity: {steel['k']:.1f} W/m·K")
 ```
 
 ### SURFACE_TREATMENTS
 
-Dictionary of 30 surface treatments with emissivity data.
+Dictionary of 30 surface treatments with emissivity data. `list_surface_treatments()`
+returns every name.
 
-Keys include: oxidized_steel, bare_aluminum, ceramic_coating, anodized_aluminum, polished_steel, painted_black, and 24 others.
+Keys include: `bare_metal`, `polished_steel`, `heavily_oxidised`, `aluminised`, `painted`, `ceramic_coating`.
 
 **Each entry contains:**
-- `emissivity` (float): Hemispherical emissivity (0–1)
+- `epsilon` (float): Emissivity (0–1)
 - `description` (str): Treatment description
-- `typical_temps_C` (list): Applicable temperatures
 
 **Example:**
 ```python
 from thermal_mesh_calculators.batch import SURFACE_TREATMENTS
 
-coating = SURFACE_TREATMENTS['ceramic_coating_high_temp']
-print(f"Emissivity: {coating['emissivity']:.2f}")
+coating = SURFACE_TREATMENTS['ceramic_coating']
+print(f"Emissivity: {coating['epsilon']:.2f}")
 ```
 
 ### get_material()
@@ -1314,16 +1314,19 @@ def get_material(name: str) -> dict
 ```
 
 **Parameters:**
-- `name` (str): Material name (case-insensitive)
+- `name` (str): Material name, a key of `MATERIALS` (case-sensitive)
 
 **Returns:**
-- `dict`: Material properties
+- `dict`: A copy of the material's properties
+
+**Raises:**
+- `KeyError`: For an unknown name; the message lists the available materials
 
 **Example:**
 ```python
 from thermal_mesh_calculators.batch import get_material
 
-mat = get_material("stainless_316")
+mat = get_material("steel_stainless_304")
 print(mat)
 ```
 
@@ -1357,16 +1360,19 @@ def get_surface_epsilon(treatment: str) -> float
 ```
 
 **Parameters:**
-- `treatment` (str): Treatment name
+- `treatment` (str): Treatment name, a key of `SURFACE_TREATMENTS`
 
 **Returns:**
 - `float`: Emissivity (0–1)
+
+**Raises:**
+- `KeyError`: For an unknown name; the message lists the available treatments
 
 **Example:**
 ```python
 from thermal_mesh_calculators.batch import get_surface_epsilon
 
-eps = get_surface_epsilon("oxidized_steel")
+eps = get_surface_epsilon("heavily_oxidised")
 print(f"Emissivity: {eps:.2f}")
 ```
 
@@ -1540,13 +1546,13 @@ print(table)
 ```python
 from thermal_mesh_calculators.conduction import BoundaryDrivenConductionCalculator
 
-k = 50.0              # Stainless steel, W/m·K
+k = 50.0              # Carbon steel, W/m·K
 h = 75.0              # Convection coefficient, W/m²·K
 t_surf = 873.15       # Surface temp, K (600°C)
 t_fluid = 343.15      # Fluid temp, K (70°C)
 epsilon = 0.7         # Emissivity
 t_surr = 343.15       # Surroundings, K
-max_dt = 0.1          # Max time step, s
+max_dt = 10.0         # Max temperature drop per element, K
 
 result = BoundaryDrivenConductionCalculator.max_mesh_size(
     k, h, t_surf, t_fluid, epsilon, t_surr, max_dt
@@ -1718,6 +1724,6 @@ The thermal-mesh-calculators package provides comprehensive thermal analysis and
 - Convection modeling: Biot numbers, h estimation, zone databases
 - Radiation effects: View factors, flux sensitivity, emissivity
 - Batch processing: Multi-part analysis with unified mesh recommendations
-- Material and surface databases: 44 materials and 30 surface treatments
+- Material and surface databases: 43 materials and 30 surface treatments
 
 All functions are pure Python with no external dependencies.

@@ -288,19 +288,19 @@ Test strategy:
 
 ### "Add a new material"
 - Add entry to `MATERIALS` dict in `batch.py`
-- Keys: `k` (W/mK), `rho` (kg/m³), `cp` (J/kgK), `alpha` (m²/s) — alpha = k/(rho*cp)
+- Keys: `k` (W/mK), `rho` (kg/m³), `cp` (J/kgK), `description` (str); the diffusivity alpha = k/(rho*cp) is computed where it is needed, not stored
 - Group in appropriate category comment block (steels, aluminium, plastics, etc.)
 - Run `python -m pytest tests/test_batch.py -v` to verify
 
 ### "Add a new surface treatment"
 - Add entry to `SURFACE_TREATMENTS` dict in `batch.py`
 - Key: treatment name (lowercase, underscored)
-- Value: dict with `eps` (emissivity, 0–1)
+- Value: dict with `epsilon` (emissivity, 0–1) and `description` (str)
 - Run `python -m pytest tests/test_batch.py -v` to verify
 
 ### "Add a new convection zone"
 - Add entry to `CONVECTION_ZONES` dict in `zones.py`
-- Required keys: `h_low`, `h_high`, `velocity_ms`, `t_air_C`, `orientation`, `is_internal`
+- Required keys: `h_low`, `h_high`, `velocity_ms`, `t_air_C_low`, `t_air_C_high`, `orientation`, `regime`, `is_internal`, `notes`
 - Run `python -m pytest tests/test_zones.py -v` to verify
 
 ### "Add CLI interface"
