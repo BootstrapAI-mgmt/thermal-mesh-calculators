@@ -52,7 +52,6 @@ from thermal_mesh_calculators.conduction import BoundaryDrivenConductionCalculat
 from thermal_mesh_calculators.convection import ConvectionMeshCalculator
 from thermal_mesh_calculators.h_estimator import estimate_h
 from thermal_mesh_calculators.boundary_layer import BoundaryLayerCalculator
-from thermal_mesh_calculators.constants import STEFAN_BOLTZMANN
 
 # ============================================================
 # Global boundary conditions

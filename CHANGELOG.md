@@ -125,6 +125,12 @@ change)** can alter a result, or raise where 0.6.2 returned one.
   `lateral_gradient_limit()` with k ≤ 0 now raises where it returned `inf`.
 
 ### Fixed
+- Parameters that default to `None` are annotated `Optional[...]`, so a type
+  checker reading the shipped `py.typed` accepts an explicit `None` for them:
+  `estimate_spatial_gradient()`'s `q_total`, `resolve_scheme()`'s `scheme`,
+  `combined_transient_limits()`'s `scheme` and `tau_bc`, the shield solvers'
+  `h_in`, `h_out` and `h_total`, and `solver_advisory()`'s `forced_result` and
+  `natural_result`.
 - A gap emissivity (`eps_g1`, `eps_g2`) or view factor (`f12`) of zero raised
   `ZeroDivisionError` in `MultilayerShieldCalculator.solve_temperatures()`. It
   is now the limit it tends to: no radiative exchange across the gap

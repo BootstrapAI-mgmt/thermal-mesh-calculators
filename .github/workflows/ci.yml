@@ -1,7 +1,8 @@
 name: CI
 
-# Every push and pull request runs one Linux leg (Python 3.11), the open/closed map
-# check and the package job. The rest of the supported matrix (the Python 3.9 floor,
+# Every push and pull request runs one Linux leg (Python 3.11) with the README's
+# examples, ruff, mypy, the install check, the open/closed map check and the package
+# job, all on Ubuntu. The rest of the supported matrix (the Python 3.9 floor,
 # Python 3.13 with PyYAML, and Windows) runs weekly and on manual dispatch; run it
 # from the Actions tab before tagging a release.
 #
@@ -92,6 +93,58 @@ jobs:
         run: python -m pytest -q -rs
       - name: Run the README's examples
         run: python -m pytest --doctest-glob=README.md README.md
+
+  lint:
+    name: ruff
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install ruff
+        # Pinned, like the rule set in pyproject.toml, so that a ruff release cannot
+        # turn this job red on its own.
+        run: python -m pip install --upgrade pip ruff==0.16.9
+      - name: ruff check
+        run: python -m ruff check --output-format=github .
+
+  typecheck:
+    name: mypy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install mypy
+        # Pinned for the same reason as ruff. The package ships py.typed, so its
+        # annotations are part of what it publishes; [tool.mypy] in pyproject.toml
+        # names what is checked.
+        run: python -m pip install --upgrade pip mypy==2.3.1
+      - name: mypy
+        run: python -m mypy
+
+  install:
+    name: pip install . and import
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: pip install . into a clean environment
+        run: |
+          python -m venv "$RUNNER_TEMP/install-venv"
+          "$RUNNER_TEMP/install-venv/bin/python" -m pip install --upgrade pip
+          "$RUNNER_TEMP/install-venv/bin/python" -m pip install .
+      - name: Import the installed package and print its version
+        # As in the package job, the `cd` and `-I` keep the import from resolving
+        # to the source tree in the checkout; the job fails unless the package was
+        # imported from site-packages.
+        run: |
+          cd "$RUNNER_TEMP"
+          "$RUNNER_TEMP/install-venv/bin/python" -I -c "import sys, thermal_mesh_calculators as t; print(t.__file__); print(t.__version__); sys.exit(0 if 'site-packages' in t.__file__ else 1)"
 
   open-closed-map:
     name: open/closed map

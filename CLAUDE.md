@@ -252,7 +252,14 @@ follows. Runtime dependencies must stay empty — see Design Decisions #1.
 
 ```bash
 python -m pytest tests/ -v
+python -m pytest --doctest-glob=README.md README.md   # the README's examples
+python -m ruff check .                                # ruff's default rule set, written out in pyproject.toml
+python -m mypy                                        # the package's annotations ([tool.mypy])
 ```
+
+CI runs all four on every push and pull request (ruff and mypy at pinned versions),
+and also installs the package with `pip install .` and imports it from outside the
+checkout.
 
 465 tests across 14 test files (415 physics and input-validation + 18 for the open/closed map checker + 32 for the release statements and the documented test counts).
 Test strategy:

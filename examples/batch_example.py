@@ -256,7 +256,7 @@ def main():
                       f"({t['binding_constraint']})")
 
             if r.get("all_constraints"):
-                print(f"    Constraints: ", end="")
+                print("    Constraints: ", end="")
                 for i, c in enumerate(r["all_constraints"]):
                     sep = "  |  " if i > 0 else ""
                     print(f"{sep}{c['source']}={c['dx_mm']:.2f}", end="")

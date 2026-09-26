@@ -18,15 +18,11 @@ from thermal_mesh_calculators.conduction import BoundaryDrivenConductionCalculat
 from thermal_mesh_calculators.convection import ConvectionMeshCalculator
 from thermal_mesh_calculators.h_estimator import (
     natural_convection,
-    forced_convection_flat_plate,
     richardson_number,
     estimate_h,
     solver_advisory,
-    air_properties,
 )
 from thermal_mesh_calculators.batch import MATERIALS
-
-import math
 
 
 # =========================================================================
@@ -301,7 +297,7 @@ def study_3_forced_suppresses_turbulent_natural():
             print(f"  → Min velocity for forced dominance (Ri<0.1): "
                   f"{v_crit_ms:.2f} m/s = {v_crit_mph:.1f} mph")
         else:
-            print(f"  → Natural conv is laminar — SS ok without forced flow")
+            print("  → Natural conv is laminar — SS ok without forced flow")
 
         print()
 
@@ -423,7 +419,6 @@ def study_4_vehicle_examples():
 
         # Biot
         biot = ConvectionMeshCalculator.biot_number(h=h, k=k, thickness=thickness_m)
-        bi = biot["biot"]
         if biot["mesh_type"] == "3D Solid":
             bi_dx = ex["thickness_mm"] / biot["min_elements_through_thickness"]
         else:

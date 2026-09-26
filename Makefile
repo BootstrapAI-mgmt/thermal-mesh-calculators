@@ -1,4 +1,4 @@
-.PHONY: examples test doctest lint clean
+.PHONY: examples test doctest lint typecheck clean
 
 # Run all worked examples
 examples:
@@ -12,17 +12,13 @@ test:
 doctest:
 	python -m pytest --doctest-glob=README.md README.md
 
-# Basic lint check
+# Lint with ruff, as CI does (the rule set is in pyproject.toml; needs ruff)
 lint:
-	python -m py_compile thermal_mesh_calculators/__init__.py
-	python -m py_compile thermal_mesh_calculators/constants.py
-	python -m py_compile thermal_mesh_calculators/conduction.py
-	python -m py_compile thermal_mesh_calculators/convection.py
-	python -m py_compile thermal_mesh_calculators/radiation.py
-	python -m py_compile thermal_mesh_calculators/shields.py
-	python -m py_compile thermal_mesh_calculators/transient.py
-	python -m py_compile examples/automotive_examples.py
-	@echo "All modules compile OK"
+	python -m ruff check .
+
+# Type-check the package with mypy, as CI does (configured in pyproject.toml; needs mypy)
+typecheck:
+	python -m mypy
 
 clean:
 	find . -type d -name __pycache__ -exec rm -rf {} + 2>/dev/null || true

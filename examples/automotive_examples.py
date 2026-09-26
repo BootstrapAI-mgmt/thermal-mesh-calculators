@@ -63,8 +63,8 @@ def main():
     print(f"  Radiation flux:    {result2['q_rad']:.0f} W/m^2")
     print(f"  Total flux:        {result2['q_total']:.0f} W/m^2")
     print(f"  >> Max element size: {result2['max_dx_mm']:.2f} mm")
-    print(f"  NOTE: Low conductivity drives very fine mesh even at")
-    print(f"  moderate temperatures.")
+    print("  NOTE: Low conductivity drives very fine mesh even at")
+    print("  moderate temperatures.")
 
     # ------------------------------------------------------------------
     # 3. CONVECTION — Biot number evaluation
@@ -96,7 +96,7 @@ def main():
         h_min=50.0,        # Far-field
         gradient_length_mm=15.0,
     )
-    print(f"  h varies 50 → 800 W/m^2K over 15 mm:")
+    print("  h varies 50 → 800 W/m^2K over 15 mm:")
     print(f"    h ratio: {h_grad['h_ratio']:.1f}x")
     print(f"    Elements needed: {h_grad['elements_needed']}")
     print(f"    >> Max element size: {h_grad['max_dx_mm']:.2f} mm")
@@ -106,7 +106,7 @@ def main():
         fluid_wall_face_mm=2.0,
         mapping_ratio=4.0,
     )
-    print(f"  CFD wall face = 2 mm, 4:1 mapping ratio:")
+    print("  CFD wall face = 2 mm, 4:1 mapping ratio:")
     print(f"    >> Max solid surface element: {cfd_limit:.1f} mm")
 
     # ------------------------------------------------------------------
@@ -178,7 +178,7 @@ def main():
         eps_in=0.4,
         eps_out=0.4,
     )
-    print(f"  Asymmetric case (h_in=15, h_out=60):")
+    print("  Asymmetric case (h_in=15, h_out=60):")
     print(f"    Shield temp:  {s1b['t_shield_C']:.1f} C")
     print(f"    Conv (in):    {s1b['q_conv_in']:.0f} W/m^2")
     print(f"    Conv (out):   {s1b['q_conv_out']:.0f} W/m^2")
@@ -212,7 +212,7 @@ def main():
     print(f"  Converged: {m['converged']} in {m['iterations']} iterations")
     print()
     print(f"  KEY INSIGHT: Layer 2 allows {m['layer2_max_dx_mm']/m['layer1_max_dx_mm']:.1f}x")
-    print(f"  coarser mesh than Layer 1 — significant node count savings.")
+    print("  coarser mesh than Layer 1 — significant node count savings.")
 
     # ------------------------------------------------------------------
     # 9. MULTILAYER — High-emissivity (oxidised) comparison
@@ -237,8 +237,8 @@ def main():
     print(f"  Layer 2: {m2['t2_C']:.1f} C  ->  max dx = {m2['layer2_max_dx_mm']:.2f} mm")
     print(f"  Delta T: {m2['delta_T_C']:.1f} C")
     print()
-    print(f"  COMPARISON: Higher emissivity increases radiation coupling,")
-    print(f"  raising Layer 1 heat load and requiring finer mesh.")
+    print("  COMPARISON: Higher emissivity increases radiation coupling,")
+    print("  raising Layer 1 heat load and requiring finer mesh.")
 
     # ------------------------------------------------------------------
     # 10. TRANSIENT — Penetration depth and Fourier number
@@ -305,8 +305,8 @@ def main():
     print(f"  >> Recommended dx: {combo_plastic['recommended_dx_mm']:.3f} mm")
     print(f"     Binding constraint: {combo_plastic['binding_constraint']}")
     print()
-    print(f"  NOTE: Low thermal diffusivity in plastics makes transient")
-    print(f"  constraints much tighter than for metals.")
+    print("  NOTE: Low thermal diffusivity in plastics makes transient")
+    print("  constraints much tighter than for metals.")
 
 
 if __name__ == "__main__":

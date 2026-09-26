@@ -11,9 +11,7 @@ Verification strategy:
     - Mesh size consistency: boundary flux → dx_max relationship
 """
 
-import math
 import pytest
-from thermal_mesh_calculators.constants import STEFAN_BOLTZMANN
 from thermal_mesh_calculators.shields import (
     SingleLayerShieldCalculator,
     MultilayerShieldCalculator,
