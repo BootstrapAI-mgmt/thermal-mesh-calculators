@@ -33,6 +33,7 @@ examples/
 analysis/
     regime_crossover_study.py   # Parametric study: conduction vs convection dominance thresholds
     offroad_regime_study.py     # Off-road 10 mph study: laminar/turbulent/mixed regime mapping
+    exhaust_underbody_scenario.py # Off-road underbody exhaust: pipe and cargo shields, cargo bed
 tests/
     test_conduction.py          # 14 tests (incl. lateral gradient)
     test_convection.py          # 12 tests (incl. cell Biot 20x)
@@ -47,8 +48,8 @@ tests/
     test_fail_loud.py           # 22 tests — one planted input per formerly silent path, each failing on 0.6.2
     test_input_guards.py        # 82 tests — one planted violation per guarded input
     test_open_closed_map.py     # 18 tests — OPEN-CLOSED-MAP.yaml schema + checker (not physics)
-    test_release_statements.py  # 26 tests — version pins, tag links, "On PyPI since" vs CHANGELOG, the documented test counts (not physics)
-                                # 459 tests total
+    test_release_statements.py  # 32 tests — version pins, tag links, "On PyPI since" vs CHANGELOG, post-releases, the documented test counts (not physics)
+                                # 465 tests total
 ```
 
 ### Design Decisions
@@ -162,9 +163,10 @@ Emissivity fallback logic: non-metals → 0.90, aluminium → 0.30, other metals
 - [x] 415 pytest unit tests with analytical verification and energy balance closure
 - [x] Inputs checked (unreleased; CHANGELOG `[Unreleased]`): unknown part names raise `PartInputError` naming the allowed set, physical inputs are range-guarded, and defaulted or extrapolated inputs, shield non-convergence and transient conflicts come back as coded warnings
 - [x] Full mathematical derivation documentation (docs/math_derivations.md, Sections 1–14)
-- [x] Published to PyPI — `pip install thermal-mesh-calculators` (0.6.1, 2026-09-16,
-      the first release on the index, `requires-python` narrowed to `>=3.9` for it;
-      0.6.2 followed on 2026-09-17)
+- [x] Published to PyPI — `pip install thermal-mesh-calculators`. 0.6.1 (2026-09-16,
+      `requires-python` narrowed to `>=3.9` for it) and 0.6.2 (2026-09-17) were
+      withdrawn from the index; it serves 0.6.2.post1 (2026-09-26), the 0.6.2 code
+      under a new file name, tagged `v0.6.2.post1` from `v0.6.2` rather than `main`
 
 ### Key Findings from Parametric Studies
 
@@ -239,7 +241,7 @@ PEP 621, setuptools backend):
 
 ```bash
 python -m build                       # -> dist/*.whl + dist/*.tar.gz
-pip install thermal-mesh-calculators  # from PyPI, 0.6.1 onwards
+pip install thermal-mesh-calculators  # from PyPI: 0.6.2.post1
 ```
 
 The distribution version is read dynamically from
@@ -250,9 +252,16 @@ follows. Runtime dependencies must stay empty — see Design Decisions #1.
 
 ```bash
 python -m pytest tests/ -v
+python -m pytest --doctest-glob=README.md README.md   # the README's examples
+python -m ruff check .                                # the rule set written out in pyproject.toml (E4, E7, E9, F)
+python -m mypy                                        # the package's annotations ([tool.mypy])
 ```
 
-459 tests across 14 test files (415 physics and input-validation + 18 for the open/closed map checker + 26 for the release statements and the documented test counts).
+CI runs all four on every push and pull request (ruff and mypy at pinned versions),
+and also installs the package with `pip install .` and imports it from outside the
+checkout.
+
+465 tests across 14 test files (415 physics and input-validation + 18 for the open/closed map checker + 32 for the release statements and the documented test counts).
 Test strategy:
 - Hand-computed analytical solutions for known inputs
 - Edge cases (zero flux, zero emissivity, pure convection/radiation)
@@ -279,19 +288,19 @@ Test strategy:
 
 ### "Add a new material"
 - Add entry to `MATERIALS` dict in `batch.py`
-- Keys: `k` (W/mK), `rho` (kg/m³), `cp` (J/kgK), `alpha` (m²/s) — alpha = k/(rho*cp)
+- Keys: `k` (W/mK), `rho` (kg/m³), `cp` (J/kgK), `description` (str); the diffusivity alpha = k/(rho*cp) is computed where it is needed, not stored
 - Group in appropriate category comment block (steels, aluminium, plastics, etc.)
 - Run `python -m pytest tests/test_batch.py -v` to verify
 
 ### "Add a new surface treatment"
 - Add entry to `SURFACE_TREATMENTS` dict in `batch.py`
 - Key: treatment name (lowercase, underscored)
-- Value: dict with `eps` (emissivity, 0–1)
+- Value: dict with `epsilon` (emissivity, 0–1) and `description` (str)
 - Run `python -m pytest tests/test_batch.py -v` to verify
 
 ### "Add a new convection zone"
 - Add entry to `CONVECTION_ZONES` dict in `zones.py`
-- Required keys: `h_low`, `h_high`, `velocity_ms`, `t_air_C`, `orientation`, `is_internal`
+- Required keys: `h_low`, `h_high`, `velocity_ms`, `t_air_C_low`, `t_air_C_high`, `orientation`, `regime`, `is_internal`, `notes`
 - Run `python -m pytest tests/test_zones.py -v` to verify
 
 ### "Add CLI interface"

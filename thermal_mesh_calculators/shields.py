@@ -33,7 +33,8 @@ corresponding boundary-driven mesh sizes, so the user gets independent
 mesh targets for each layer.
 """
 
-import math
+from typing import Optional
+
 from thermal_mesh_calculators.constants import STEFAN_BOLTZMANN
 from thermal_mesh_calculators._guards import (
     require_fraction,
@@ -89,9 +90,9 @@ class SingleLayerShieldCalculator:
         t_surr: float,
         eps_in: float,
         eps_out: float,
-        h_in: float = None,
-        h_out: float = None,
-        h_total: float = None,
+        h_in: Optional[float] = None,
+        h_out: Optional[float] = None,
+        h_total: Optional[float] = None,
         tol: float = 0.1,
         max_iter: int = 50,
     ) -> dict:
@@ -199,9 +200,9 @@ class SingleLayerShieldCalculator:
         t_surr: float,
         eps_in: float,
         eps_out: float,
-        h_in: float = None,
-        h_out: float = None,
-        h_total: float = None,
+        h_in: Optional[float] = None,
+        h_out: Optional[float] = None,
+        h_total: Optional[float] = None,
         tol: float = 0.1,
         max_iter: int = 50,
     ) -> dict:

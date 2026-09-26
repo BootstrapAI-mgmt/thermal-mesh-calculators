@@ -4,6 +4,8 @@ All notable changes to **thermal-mesh-calculators** are documented here.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+A post-release such as `0.6.2.post1` follows PEP 440, since Semantic Versioning
+defines no post-release.
 
 Versions prior to `v0.6.0` were developed in-repo but never tagged or published;
 their dates below are the dates of the commit that completed the version. `v0.6.0`
@@ -123,6 +125,12 @@ change)** can alter a result, or raise where 0.6.2 returned one.
   `lateral_gradient_limit()` with k ≤ 0 now raises where it returned `inf`.
 
 ### Fixed
+- Parameters that default to `None` are annotated `Optional[...]`, so a type
+  checker reading the shipped `py.typed` accepts an explicit `None` for them:
+  `estimate_spatial_gradient()`'s `q_total`, `resolve_scheme()`'s `scheme`,
+  `combined_transient_limits()`'s `scheme` and `tau_bc`, the shield solvers'
+  `h_in`, `h_out` and `h_total`, and `solver_advisory()`'s `forced_result` and
+  `natural_result`.
 - A gap emissivity (`eps_g1`, `eps_g2`) or view factor (`f12`) of zero raised
   `ZeroDivisionError` in `MultilayerShieldCalculator.solve_temperatures()`. It
   is now the limit it tends to: no radiative exchange across the gap
@@ -136,6 +144,20 @@ change)** can alter a result, or raise where 0.6.2 returned one.
 - A shield given both `h_in_override` and `h_out_override` no longer needs a
   convection zone: 0.6.2 looked the zones up before reading the overrides and
   raised `KeyError` when they were absent.
+
+## [0.6.2.post1] — 2026-09-26
+
+Re-publication of 0.6.2 on PyPI. No library code changed; only the version string
+differs.
+
+- **Changed:** the 0.6.1 and 0.6.2 files were withdrawn from PyPI, and PyPI never
+  accepts a file name it has seen before, so the 0.6.2 code was published again
+  under a new file name, as the post-release `0.6.2.post1` (uploaded on 2026-09-26;
+  its tag is dated 2026-09-25). `pip install thermal-mesh-calculators` installs it,
+  and a `<0.7` pin admits it; a `==0.6.2` pin no longer resolves from PyPI.
+- `__version__` reads `0.6.2.post1` only on the tag `v0.6.2.post1`, which was made
+  from `v0.6.2`, not from `main`. On `main` it stays `0.6.2`: `main` has moved on
+  to the changes listed under [Unreleased], which belong to the next release.
 
 ## [0.6.2] — 2026-09-17
 
@@ -249,4 +271,5 @@ pinnable artifact. No calculator behaviour changed as part of the packaging work
   CFD mapping), radiation (T⁴ sensitivity, view-factor curvature), and the
   single-layer and multilayer Newton-Raphson heat-shield solvers.
 
+[0.6.2.post1]: https://github.com/BootstrapAI-mgmt/thermal-mesh-calculators/compare/v0.6.2...v0.6.2.post1
 [0.6.2]: https://github.com/BootstrapAI-mgmt/thermal-mesh-calculators/releases/tag/v0.6.2

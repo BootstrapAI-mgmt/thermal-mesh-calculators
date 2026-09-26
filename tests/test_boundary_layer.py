@@ -8,13 +8,11 @@ import unittest
 from thermal_mesh_calculators.boundary_layer import (
     BoundaryLayerCalculator,
     RE_X_MIN,
-    RE_X_CRIT,
     Y1_ABSOLUTE_MIN_M,
     _WALL_GRADIENT_PRISM_THRESHOLD,
     ER_V_STABLE,
     ER_V_MARGINAL,
 )
-from thermal_mesh_calculators.h_estimator import air_properties
 
 
 class TestSkinFriction(unittest.TestCase):

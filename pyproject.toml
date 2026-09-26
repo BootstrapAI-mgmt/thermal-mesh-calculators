@@ -45,7 +45,8 @@ classifiers = [
 # Intentionally empty and load-bearing. The calculators must run inside CAE
 # pre-processor embedded interpreters (HyperMesh, ANSA, …) which have limited
 # package availability, so the package is pure standard library. Verified by an
-# AST scan of every module: the only non-self top-level import is ``math``.
+# AST scan of every module: the only non-self top-level imports are ``math`` and
+# ``typing``, both standard library.
 # Do not add numpy/scipy — see CLAUDE.md "Design Decisions" #1.
 dependencies = []
 
@@ -80,3 +81,17 @@ namespaces = false
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+
+[tool.ruff.lint]
+# The rule set E4, E7, E9, F (ruff's default before 0.16), written out so that a
+# newer ruff cannot change what CI enforces.
+select = ["E4", "E7", "E9", "F"]
+
+[tool.ruff.lint.per-file-ignores]
+# The package's public API: these names are imported to be re-exported.
+"thermal_mesh_calculators/__init__.py" = ["F401"]
+
+[tool.mypy]
+# The package ships py.typed, so its annotations are checked. mypy 2.3 checks
+# against Python 3.10 or later; the 3.9 floor is exercised by the weekly test leg.
+files = ["thermal_mesh_calculators"]

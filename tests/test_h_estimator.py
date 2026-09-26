@@ -2,7 +2,6 @@
 Tests for h_estimator — forced, natural, mixed convection + Richardson number.
 """
 
-import math
 import pytest
 from thermal_mesh_calculators.h_estimator import (
     air_properties,

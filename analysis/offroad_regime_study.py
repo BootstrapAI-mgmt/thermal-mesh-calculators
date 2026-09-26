@@ -14,16 +14,15 @@ Sweeps:
   3. When does 10 mph forced flow suppress turbulent buoyancy (Ri < 0.1)
 """
 
-import sys, os
+import sys
+import os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from thermal_mesh_calculators.conduction import BoundaryDrivenConductionCalculator
 from thermal_mesh_calculators.convection import ConvectionMeshCalculator
 from thermal_mesh_calculators.h_estimator import (
-    natural_convection, forced_convection_flat_plate,
-    richardson_number, estimate_h, solver_advisory,
+    natural_convection, richardson_number, estimate_h,
 )
-from thermal_mesh_calculators.batch import MATERIALS
 
 V_BASELINE_MPH = 10.0
 V_BASELINE_MS = V_BASELINE_MPH * 0.44704
@@ -101,7 +100,7 @@ def study_1():
             print(f"    Conduction dx range: {min_c['cond_dx']:.1f} – "
                   f"{max(c['cond_dx'] for c in crossovers):.1f} mm")
             if cond_sub_10:
-                print(f"    Conduction dx < 10mm when:")
+                print("    Conduction dx < 10mm when:")
                 for c in cond_sub_10:
                     if c["cond_dx"] == min(cc["cond_dx"] for cc in cond_sub_10 if cc["t_C"] == c["t_C"]):
                         print(f"      T_surf={c['t_C']}°C, h≥{c['h']}: dx={c['cond_dx']:.1f}mm "

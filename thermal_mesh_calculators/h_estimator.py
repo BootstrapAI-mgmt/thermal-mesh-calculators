@@ -36,7 +36,8 @@ Air properties:
 Units:  SI throughout (m, s, K, W).
 """
 
-import math
+from typing import Optional
+
 from thermal_mesh_calculators._guards import (
     require_non_negative,
     require_positive,
@@ -142,8 +143,8 @@ _RE_TURB = 5e5
 
 
 def solver_advisory(
-    forced_result: dict = None,
-    natural_result: dict = None,
+    forced_result: Optional[dict] = None,
+    natural_result: Optional[dict] = None,
     regime: str = "natural",
     orientation: str = "vertical",
 ) -> dict:
@@ -231,10 +232,10 @@ def solver_advisory(
             if severity == "info":
                 severity = "caution"
             reason = (
-                f"Mixed convection regime (Ri between 0.1 and 10). "
-                f"Both forced and buoyant effects are significant. "
-                f"Verify convergence carefully in steady-state, or "
-                f"consider transient solve for more reliable results."
+                "Mixed convection regime (Ri between 0.1 and 10). "
+                "Both forced and buoyant effects are significant. "
+                "Verify convergence carefully in steady-state, or "
+                "consider transient solve for more reliable results."
             )
 
     # --- Near-zero dT: negligible natural convection ---

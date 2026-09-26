@@ -17,7 +17,6 @@ from thermal_mesh_calculators.batch import (
     get_material,
     get_surface_epsilon,
     list_materials,
-    list_surface_treatments,
     _resolve_epsilon,
     process_part,
     process_batch,
@@ -301,9 +300,10 @@ class TestBoundaryLayerIntegration:
         r = process_part(part, PROJECT)
         # BL at y+=1 should produce very small surface mesh
         bl_dx = r["boundary_layer"]["max_dx_surface_mm"]
-        # It should appear in candidates (may or may not govern)
+        # It should appear in candidates (may or may not govern), with its own size
         sources = [c["source"] for c in r["all_constraints"]]
         assert "aero_boundary_layer" in sources
+        assert {"dx_mm": bl_dx, "source": "aero_boundary_layer"} in r["all_constraints"]
 
 
 # --- Part validation (unknown names raise; defaulted surfaces warn) ---

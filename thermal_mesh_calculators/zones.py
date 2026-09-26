@@ -60,6 +60,8 @@ Units:  h in W/m^2 K,  velocity in m/s,  temperature in C (zone map)
         and K (internal calculations),  gradient in K/m
 """
 
+from typing import Optional
+
 from thermal_mesh_calculators._guards import require_positive
 
 
@@ -395,7 +397,7 @@ def get_zone_air_temp(zone_name: str, bound: str = "high") -> float:
 
 def estimate_spatial_gradient(
     k: float,
-    q_total: float = None,
+    q_total: Optional[float] = None,
     component_class: str = "structural",
 ) -> float:
     """

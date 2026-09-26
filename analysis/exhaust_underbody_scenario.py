@@ -37,14 +37,21 @@ Key findings:
   4. Cargo bed (plastic) needs 3D solid mesh (Bi > 0.1) with very fine elements
   5. Exhaust shields: lateral gradient (fin theory) is the binding constraint, not conduction
   6. All metallic components are shell-meshable (Bi << 0.1)
+
+Run from the repository root, as a script or as a module:
+    python analysis/exhaust_underbody_scenario.py
+    python -m analysis.exhaust_underbody_scenario
 """
+
+import os
+import sys
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from thermal_mesh_calculators.shields import SingleLayerShieldCalculator
 from thermal_mesh_calculators.conduction import BoundaryDrivenConductionCalculator
 from thermal_mesh_calculators.convection import ConvectionMeshCalculator
 from thermal_mesh_calculators.h_estimator import estimate_h
 from thermal_mesh_calculators.boundary_layer import BoundaryLayerCalculator
-from thermal_mesh_calculators.constants import STEFAN_BOLTZMANN
 
 # ============================================================
 # Global boundary conditions

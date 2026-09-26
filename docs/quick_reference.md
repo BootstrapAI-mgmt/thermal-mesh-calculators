@@ -62,6 +62,26 @@ result = ConvectionMeshCalculator.biot_number(
 # If biot ≥ 0.1 → 3D solid mesh needed
 ```
 
+For a wall at known temperatures, `BoundaryDrivenConductionCalculator.size_wall()`
+gives the number of cells through it, with radiation included:
+
+```python
+from thermal_mesh_calculators.conduction import BoundaryDrivenConductionCalculator
+
+sized = BoundaryDrivenConductionCalculator.size_wall(
+    k=0.25, h=40.0,                  # W/m K, W/m^2 K — glass-filled nylon
+    t_surf=393.15, t_fluid=353.15,   # K (120°C surface, 80°C air)
+    epsilon=0.92, t_surr=353.15,     # K
+    max_dt=5.0,                      # K — accuracy target per element
+    thickness_m=0.003,               # m (3 mm wall)
+)
+# sized["n_cells"] == 5, sized["regime"] == "resolve", round(sized["biot"], 2) == 0.61
+```
+
+`regime` is `"thermally_thin"` (Bi < 0.1: shell), `"resolve"` (0.1 ≤ Bi < 1),
+`"steep_gradient"` (Bi ≥ 1) or `"near_equilibrium"`. This Biot number uses the whole
+wall thickness and includes radiation, so it differs from `biot_number()`'s.
+
 **Rule of thumb table:**
 
 | Material Type | k (W/m K) | Typical h (W/m² K) | Biot | Recommendation |
@@ -242,7 +262,7 @@ print(f"Reasoning: {advisory['message']}")
 
 ## Material & Surface Lookup
 
-### Available Materials (44 total)
+### Available Materials (43 total)
 
 List by category with material key names for part dicts:
 
@@ -267,7 +287,7 @@ List by category with material key names for part dicts:
 **Rubbers (6):**
 `rubber_epdm`, `rubber_silicone`, `rubber_nbr`, `rubber_natural`, `rubber_cr`, `rubber_fkm`
 
-**Composites & Specialty (6):**
+**Composites & Specialty (7):**
 `composite_smc`, `composite_cfrp`, `glass_soda_lime`, `ceramic_alumina`, `ceramic_cordierite`, `insulation_fibreglass`, `insulation_ceramic_blanket`
 
 ### Available Surface Treatments (30 total)

@@ -82,6 +82,8 @@ in mm (_mm suffix keys).
 """
 
 import math
+from typing import Any, Dict, Optional, cast
+
 from thermal_mesh_calculators._guards import require_positive
 
 
@@ -261,7 +263,7 @@ class TransientMeshCalculator:
         }
 
     @staticmethod
-    def resolve_scheme(scheme: str = None, fo_max: float = 0.5) -> str:
+    def resolve_scheme(scheme: Optional[str] = None, fo_max: float = 0.5) -> str:
         """
         The time-integration scheme: "explicit" or "implicit".
 
@@ -286,8 +288,8 @@ class TransientMeshCalculator:
         dt: float,
         fo_max: float = 0.5,
         safety_factor: float = 1.0,
-        tau_bc: float = None,
-        scheme: str = None,
+        tau_bc: Optional[float] = None,
+        scheme: Optional[str] = None,
     ) -> dict:
         """
         Evaluate all applicable transient mesh constraints and identify
@@ -376,7 +378,7 @@ class TransientMeshCalculator:
         feasible = lower_fo <= max_dx * (1.0 + _BOUND_RTOL)
 
         remedies = []
-        conflict = None
+        conflict: Optional[Dict[str, Any]] = None
         if not feasible:
             if penetration_applied and lower_fo > upper_pen * (1.0 + _BOUND_RTOL):
                 # Both scale with sqrt(dt); their ratio 1/(C sqrt(Fo_max))
@@ -388,15 +390,16 @@ class TransientMeshCalculator:
             if dc_limit is not None and lower_fo > dc_limit * (1.0 + _BOUND_RTOL):
                 # sqrt(alpha dt / Fo_max) <= sqrt(alpha tau_bc)
                 #   <=>  dt <= Fo_max * tau_bc
-                remedies.append({
+                remedies.append({  # dc_limit exists only when tau_bc was given
                     "parameter": "dt",
-                    "max_value": fo_max * tau_bc,
+                    "max_value": fo_max * cast(float, tau_bc),
                 })
             conflict = {
                 "message": (
                     f"The {_LABEL_TEXT[fourier_label]} minimum "
                     f"({lower_fo:.4g} mm, Fo <= {fo_max:g}) exceeds the "
-                    f"{_LABEL_TEXT[max_label]} bound ({max_dx:.4g} mm): "
+                    # Infeasible means a finite upper bound, so max_label is set.
+                    f"{_LABEL_TEXT[cast(str, max_label)]} bound ({max_dx:.4g} mm): "
                     f"no element satisfies both at dt = {dt:g} s. "
                     + _describe_remedies(remedies, fo_max, safety_factor)
                 ),
@@ -428,7 +431,8 @@ class TransientMeshCalculator:
                                      short=True)
                 + ")"
             )
-            advice = conflict["message"]
+            # conflict was built above, as for every infeasible window.
+            advice = cast(Dict[str, Any], conflict)["message"]
 
         return {
             "alpha": alpha,

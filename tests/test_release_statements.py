@@ -10,8 +10,12 @@ The checks hold each statement to two sources of truth kept in the tree, so they
 run offline, on the standard library alone:
 
 * ``__version__`` in ``thermal_mesh_calculators/__init__.py`` -- no statement may
-  name a version newer than the one the package declares;
-* CHANGELOG.md -- its ``## [x.y.z]`` headings are the released versions, and its
+  name a release newer than the one the package declares. A version is a plain
+  ``x.y.z`` or a PEP 440 post-release ``x.y.z.postN``, which publishes release
+  ``x.y.z`` again, so a post-release is held to ``__version__`` by its ``x.y.z``:
+  a tree that declares 0.6.2 may name 0.6.2.post1, but not 0.6.3.post1;
+* CHANGELOG.md -- its ``## [x.y.z]`` and ``## [x.y.z.postN]`` headings are the
+  released versions, and its
   Keep a Changelog link definitions, ``[x.y.z]: <repository>/releases/tag/vx.y.z``,
   are the release tags this repository carries. A test cannot see the remote, so
   those definitions stand in for it: add one when a tag is pushed, not before.
@@ -54,7 +58,8 @@ REPO_ROOT = _find_repo_root()
 # packager running the sdist's own suite sees that one reported as a skip, not an error.
 DOCUMENTS = ("README.md", "CHANGELOG.md", ".github/copilot-instructions.md")
 
-_PLAIN_VERSION = re.compile(r"(\d+)\.(\d+)\.(\d+)")
+# A release version: x.y.z, or a post-release x.y.z.postN in PEP 440's canonical spelling.
+_RELEASE_VERSION = re.compile(r"(\d+)\.(\d+)\.(\d+)(?:\.post(\d+))?")
 _HEADING = re.compile(r"^## \[([^\]]+)\]", re.MULTILINE)
 _LINK_DEFINITION = re.compile(r"^\[([^\]]+)\]:[ \t]*(\S+)", re.MULTILINE)
 # A version token runs to the first character a version cannot contain, so a pin such as
@@ -70,13 +75,17 @@ _REPOSITORY_URL = re.compile(r'^Repository\s*=\s*"([^"]+)"', re.MULTILINE)
 # The checks
 # --------------------------------------------------------------------------------
 def parse_version(token: str) -> tuple[int, ...] | None:
-    """``"0.6.2"`` -> ``(0, 6, 2)``; anything but a plain x.y.z -> ``None``."""
-    match = _PLAIN_VERSION.fullmatch(token)
-    return tuple(int(part) for part in match.groups()) if match else None
+    """``"0.6.2"`` -> ``(0, 6, 2)`` and ``"0.6.2.post1"`` -> ``(0, 6, 2, 1)``; anything
+    else (a pre-release, a development release, a non-canonical spelling) -> ``None``."""
+    match = _RELEASE_VERSION.fullmatch(token)
+    if not match:
+        return None
+    return tuple(int(part) for part in match.groups() if part is not None)
 
 
 def _dotted(version: tuple[int, ...]) -> str:
-    return ".".join(str(part) for part in version)
+    release = ".".join(str(part) for part in version[:3])
+    return release + (".post" + str(version[3]) if len(version) > 3 else "")
 
 
 def _find_tokens(pattern: re.Pattern, text: str) -> list[tuple[int, str]]:
@@ -89,7 +98,8 @@ def _find_tokens(pattern: re.Pattern, text: str) -> list[tuple[int, str]]:
 
 
 def released_versions(changelog: str) -> set[tuple[int, ...]]:
-    """Versions with a ``## [x.y.z]`` heading; ``## [Unreleased]`` is not a release."""
+    """Versions with a ``## [x.y.z]`` or ``## [x.y.z.postN]`` heading; ``## [Unreleased]``
+    is not a release."""
     parsed = (parse_version(label) for label in _HEADING.findall(changelog))
     return {version for version in parsed if version is not None}
 
@@ -97,12 +107,16 @@ def released_versions(changelog: str) -> set[tuple[int, ...]]:
 def version_problems(
     where: str, token: str, declared: tuple[int, ...], released: set[tuple[int, ...]]
 ) -> list[str]:
-    """The rule for a named version: released, and no newer than ``__version__``."""
+    """The rule for a named version: released, and no newer than ``__version__``. A
+    post-release is compared by its x.y.z, the release it publishes again."""
     version = parse_version(token)
     if version is None:
-        return [f"{where} -- {token!r} is not a plain x.y.z release version"]
+        return [
+            f"{where} -- {token!r} is not a plain x.y.z release version "
+            "or an x.y.z.postN post-release"
+        ]
     problems = []
-    if version > declared:
+    if version[:3] > declared[:3]:
         problems.append(f"{where} -- newer than __version__ {_dotted(declared)}")
     if version not in released:
         problems.append(f"{where} -- CHANGELOG.md has no '## [{token}]' heading")
@@ -235,7 +249,9 @@ def _declared_version() -> tuple[int, ...]:
         ):
             value = ast.literal_eval(node.value)
             version = parse_version(value) if isinstance(value, str) else None
-            assert version is not None, f"__version__ = {value!r} is not a plain x.y.z version"
+            assert version is not None, (
+                f"__version__ = {value!r} is neither a plain x.y.z nor an x.y.z.postN version"
+            )
             return version
     raise AssertionError("thermal_mesh_calculators/__init__.py assigns no __version__")
 
@@ -365,6 +381,46 @@ def test_a_bad_changelog_tag_link_is_reported_and_declares_nothing(link, expecte
 def test_a_bad_on_pypi_since_statement_is_reported(readme, expected):
     problems = on_pypi_since_problems(readme, _CHANGELOG, _DECLARED)
     assert any(expected in problem for problem in problems), problems
+
+
+# A post-release (PEP 440 x.y.z.postN) publishes release x.y.z again: CHANGELOG.md gives
+# it a heading of its own and a comparison link, which declares no release tag.
+_CHANGELOG_POST1 = _CHANGELOG.replace(
+    "## [0.6.2] - 2026-09-17", "## [0.6.2.post1] - 2026-09-26\n\n## [0.6.2] - 2026-09-17"
+) + "[0.6.2.post1]: " + _REPO + "/compare/v0.6.2...v0.6.2.post1\n"
+
+
+def test_a_post_release_of_the_declared_version_reports_nothing():
+    """Guards the tests below: a tree that declares 0.6.2 may name 0.6.2.post1."""
+    assert "## [0.6.2.post1]" in _CHANGELOG_POST1
+    assert on_pypi_since_problems("On PyPI since 0.6.2.post1.\n", _CHANGELOG_POST1, _DECLARED) == []
+    assert read_tag_links(_CHANGELOG_POST1, _REPO, _DECLARED) == ({(0, 6, 2)}, [])
+
+
+@pytest.mark.parametrize(
+    "readme, expected",
+    [
+        ("On PyPI since 0.6.2.post2.\n", "no '## [0.6.2.post2]' heading"),
+        ("On PyPI since 0.6.3.post1.\n", "newer than __version__ 0.6.2"),
+        ("On PyPI since 0.6.2post1.\n", "is not a plain x.y.z release version"),  # not canonical
+    ],
+)
+def test_a_bad_post_release_statement_is_reported(readme, expected):
+    problems = on_pypi_since_problems(readme, _CHANGELOG_POST1, _DECLARED)
+    assert any(expected in problem for problem in problems), problems
+
+
+def test_a_git_ref_to_a_post_release_needs_its_release_tag_link():
+    """A comparison link declares no tag, so a pin to v0.6.2.post1 is still reported."""
+    problems = git_ref_problems("README.md", _pin("0.6.2.post1"), _CHANGELOG_POST1, _REPO, _DECLARED)
+    assert any("links no v0.6.2.post1 release tag" in problem for problem in problems), problems
+
+
+def test_a_post_release_version_is_read_and_printed_whole():
+    assert parse_version("0.6.2.post1") == (0, 6, 2, 1)
+    assert version_problems("X", "0.6.3", (0, 6, 2, 1), {(0, 6, 3)}) == [
+        "X -- newer than __version__ 0.6.2.post1"
+    ]
 
 
 _SUITE = {"test_a.py": 3, _MAP_FILE: 2, _RELEASE_FILE: 1}  # 6 tests, 3 files, 3 physics

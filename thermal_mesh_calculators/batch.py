@@ -70,6 +70,8 @@ Project-level defaults (set once, applied to all parts):
     allowable_flux_error — radiation flux error tolerance (W/m^2)
 """
 
+from typing import Any, Dict, cast
+
 from thermal_mesh_calculators.conduction import BoundaryDrivenConductionCalculator
 from thermal_mesh_calculators.convection import ConvectionMeshCalculator
 from thermal_mesh_calculators.radiation import RadiationMeshCalculator
@@ -357,7 +359,7 @@ MATERIALS = {
 #  For shields, inner and outer surfaces can have different treatments.
 # ---------------------------------------------------------------------------
 
-SURFACE_TREATMENTS = {
+SURFACE_TREATMENTS: Dict[str, Dict[str, Any]] = {
     # --- Bare / polished metals ---
     "bare_metal": {
         "epsilon": 0.25,
@@ -1051,10 +1053,11 @@ def _shield_side_h(part: dict) -> tuple:
     """(h_in, h_out) for a shield: the overrides, else each side's zone."""
     zone_in = part.get("convection_zone_in", part.get("convection_zone"))
     zone_out = part.get("convection_zone_out", part.get("convection_zone"))
+    # _validate_part has checked that a side without an override has a zone.
     h_in = (part["h_in_override"] if "h_in_override" in part
-            else get_conservative_h(zone_in))
+            else get_conservative_h(cast(str, zone_in)))
     h_out = (part["h_out_override"] if "h_out_override" in part
-             else get_conservative_h(zone_out))
+             else get_conservative_h(cast(str, zone_out)))
     return h_in, h_out
 
 
@@ -1330,7 +1333,9 @@ def process_part(part: dict, project: dict) -> dict:
     # ------------------------------------------------------------------
     #  Biot number (all classes)
     # ------------------------------------------------------------------
-    h_for_biot = h if cls not in ("shield", "multilayer_shield") else max(h_in, h_out)
+    # The branches above set h (one surface) or h_in and h_out (shields).
+    h_for_biot = (cast(float, h) if cls not in ("shield", "multilayer_shield")
+                  else max(cast(float, h_in), cast(float, h_out)))
     biot = ConvectionMeshCalculator.biot_number(
         h=h_for_biot, k=k, thickness=thickness_m,
     )
@@ -1348,7 +1353,7 @@ def process_part(part: dict, project: dict) -> dict:
     # For shields, use the exhaust-facing emissivity for radiation sizing,
     # and the exhaust-facing driving flux for the conduction-driven
     # gradient dT/dx ~ q/k (zones.estimate_spatial_gradient).
-    eps_for_rad = eps if eps is not None else eps_in
+    eps_for_rad = cast(float, eps if eps is not None else eps_in)
     if result["conduction"]:
         q_total = result["conduction"]["q_total"]
     elif cls == "shield":
@@ -1467,8 +1472,8 @@ def process_part(part: dict, project: dict) -> dict:
     if film_out_of_range:
         solve_warnings.append(_film_temperature_warning(film_out_of_range))
     if trans is not None:
-        conflict = _transient_conflict_warning(
-            trans, result["governing_dx_mm"], fo_max, dt_solver)
+        conflict = _transient_conflict_warning(  # trans is set only when dt was given
+            trans, result["governing_dx_mm"], fo_max, cast(float, dt_solver))
         if conflict is not None:
             solve_warnings.append(conflict)
     if not result["governing_dx_mm"] < float("inf"):
@@ -1558,7 +1563,6 @@ def summary_table(results: list) -> str:
         dx_str = f"{dx:.2f}" if dx < float("inf") else "inf"
         bi_val = r["biot"]["biot"] if r.get("biot") else 0.0
         bi_str = f"{bi_val:.4f}"
-        mesh_type = r["biot"]["mesh_type"] if r.get("biot") else "—"
 
         lines.append(
             f"{r['part_id']:<30s} {r['material']:<22s} "
