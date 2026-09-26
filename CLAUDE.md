@@ -47,8 +47,8 @@ tests/
     test_fail_loud.py           # 22 tests — one planted input per formerly silent path, each failing on 0.6.2
     test_input_guards.py        # 82 tests — one planted violation per guarded input
     test_open_closed_map.py     # 18 tests — OPEN-CLOSED-MAP.yaml schema + checker (not physics)
-    test_release_statements.py  # 26 tests — version pins, tag links, "On PyPI since" vs CHANGELOG, the documented test counts (not physics)
-                                # 459 tests total
+    test_release_statements.py  # 32 tests — version pins, tag links, "On PyPI since" vs CHANGELOG, post-releases, the documented test counts (not physics)
+                                # 465 tests total
 ```
 
 ### Design Decisions
@@ -162,9 +162,10 @@ Emissivity fallback logic: non-metals → 0.90, aluminium → 0.30, other metals
 - [x] 415 pytest unit tests with analytical verification and energy balance closure
 - [x] Inputs checked (unreleased; CHANGELOG `[Unreleased]`): unknown part names raise `PartInputError` naming the allowed set, physical inputs are range-guarded, and defaulted or extrapolated inputs, shield non-convergence and transient conflicts come back as coded warnings
 - [x] Full mathematical derivation documentation (docs/math_derivations.md, Sections 1–14)
-- [x] Published to PyPI — `pip install thermal-mesh-calculators` (0.6.1, 2026-09-16,
-      the first release on the index, `requires-python` narrowed to `>=3.9` for it;
-      0.6.2 followed on 2026-09-17)
+- [x] Published to PyPI — `pip install thermal-mesh-calculators`. 0.6.1 (2026-09-16,
+      `requires-python` narrowed to `>=3.9` for it) and 0.6.2 (2026-09-17) were
+      withdrawn from the index; it serves 0.6.2.post1 (2026-09-26), the 0.6.2 code
+      under a new file name, tagged `v0.6.2.post1` from `v0.6.2` rather than `main`
 
 ### Key Findings from Parametric Studies
 
@@ -239,7 +240,7 @@ PEP 621, setuptools backend):
 
 ```bash
 python -m build                       # -> dist/*.whl + dist/*.tar.gz
-pip install thermal-mesh-calculators  # from PyPI, 0.6.1 onwards
+pip install thermal-mesh-calculators  # from PyPI: 0.6.2.post1
 ```
 
 The distribution version is read dynamically from
@@ -252,7 +253,7 @@ follows. Runtime dependencies must stay empty — see Design Decisions #1.
 python -m pytest tests/ -v
 ```
 
-459 tests across 14 test files (415 physics and input-validation + 18 for the open/closed map checker + 26 for the release statements and the documented test counts).
+465 tests across 14 test files (415 physics and input-validation + 18 for the open/closed map checker + 32 for the release statements and the documented test counts).
 Test strategy:
 - Hand-computed analytical solutions for known inputs
 - Edge cases (zero flux, zero emissivity, pure convection/radiation)

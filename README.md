@@ -60,7 +60,10 @@ derivations behind every constraint are in
 pip install thermal-mesh-calculators
 ```
 
-On PyPI since 0.6.1. To pin an immutable release straight from git instead:
+On PyPI since 0.6.2.post1, which publishes the 0.6.2 code again under a new file
+name: the 0.6.1 and 0.6.2 files were withdrawn from the index. To pin an
+immutable release straight from git instead (the `v0.6.2` tag holds the same
+calculators; only `__version__` differs):
 
 ```bash
 pip install "thermal-mesh-calculators @ git+https://github.com/BootstrapAI-mgmt/thermal-mesh-calculators.git@v0.6.2"
