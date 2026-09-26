@@ -253,7 +253,7 @@ follows. Runtime dependencies must stay empty — see Design Decisions #1.
 ```bash
 python -m pytest tests/ -v
 python -m pytest --doctest-glob=README.md README.md   # the README's examples
-python -m ruff check .                                # ruff's default rule set, written out in pyproject.toml
+python -m ruff check .                                # the rule set written out in pyproject.toml (E4, E7, E9, F)
 python -m mypy                                        # the package's annotations ([tool.mypy])
 ```
 

@@ -83,8 +83,8 @@ namespaces = false
 testpaths = ["tests"]
 
 [tool.ruff.lint]
-# ruff's default rule set, written out so that a newer ruff cannot change what CI
-# enforces.
+# The rule set E4, E7, E9, F (ruff's default before 0.16), written out so that a
+# newer ruff cannot change what CI enforces.
 select = ["E4", "E7", "E9", "F"]
 
 [tool.ruff.lint.per-file-ignores]
