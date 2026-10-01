@@ -780,7 +780,6 @@ def _generate_warnings(part: dict, result: dict, project: dict) -> list:
         message  : str — human-readable explanation
     """
     warnings = []
-    mat_name = part.get("material", "")
     cls = part.get("component_class", "")
     zone_name = part.get("convection_zone", "")
     char_len_mm = part.get("char_length_mm", 100.0)
@@ -826,8 +825,12 @@ def _generate_warnings(part: dict, result: dict, project: dict) -> list:
                 })
 
     # --- 3. Plastic Biot number warning ---
-    is_plastic = any(tag in mat_name for tag in ("plastic", "rubber", "composite"))
-    if is_plastic and result.get("biot"):
+    # The material's name is read only where there is a Biot number: a
+    # fluid region has neither.
+    is_plastic = bool(result.get("biot")) and any(
+        tag in part.get("material", "")
+        for tag in ("plastic", "rubber", "composite"))
+    if is_plastic:
         biot_val = result["biot"]["biot"]
         h_used = result.get("h_used", 0)
         if isinstance(h_used, dict):

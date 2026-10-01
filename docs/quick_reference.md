@@ -187,7 +187,8 @@ h_direct = h_from_velocity(
 
 ### 8. "I need to process hundreds of parts from a BOM"
 
-Use `process_batch()` with a list of part dicts.
+Use `process_batch()` with a list of part dicts, or read them from a CSV or
+JSON file with `load_bom()` (below).
 
 ```python
 from thermal_mesh_calculators.batch import process_batch, summary_table
@@ -238,6 +239,31 @@ print(summary_table(results))
 - `surface` or `surface_in`/`surface_out` — optional emissivity specification
 - `h_override` — optional specific h instead of zone lookup
 - `char_length_mm` — optional for h estimation
+- a fluid region (`component_class: "fluid"`) gives `part_id`, the class and
+  `convection_zone`, and is sized by its boundary layer alone
+
+Every key a part or project may carry, with its type, range, the classes that
+read it and its default, is in [`integration.md`](integration.md); a key no
+schema declares is refused, unless it starts with `x_`.
+
+**From a file:** `load_bom("parts.csv")` (or a `.json` file) returns one part
+dict per row, with `bom_row`; a bad row carries `bom_errors` with every
+problem it has, and `process_batch()` returns an error result for it beside the
+sized good rows. Material and zone names are read through `resolve_material()`
+and `resolve_zone()`, so "Mild steel" and "beside engine" work.
+
+```python
+from thermal_mesh_calculators import load_bom, process_batch
+
+parts = load_bom("parts.csv")
+for r in process_batch(parts, project):
+    if r["error"]:
+        print(f"row {r['bom_row']}: {r['error']}")
+```
+
+**From your own material data:** `process_part_from_props(part, project,
+k=..., rho=..., cp=...)` sizes a part from properties you hold; the part's
+`material` is then a label of your own.
 
 ### 9. "How do I know if steady-state is appropriate?"
 
@@ -347,15 +373,26 @@ All zones are in `zones.CONVECTION_ZONES`. Use the key name in `convection_zone`
 
 ## Warning Codes
 
-Common warnings from the batch processor:
+Every code a result's `warnings` may carry, from `WARNING_CODES` (a test holds
+this table to it); `validate_result()` refuses any other code or severity.
 
-| Code | Severity | Meaning | Action |
-|---|---|---|---|
-| `TURB_NAT_HORIZ_UP` | caution | Horizontal hot-side-up dead zone > 150 mm | May trigger turbulent natural convection; monitor solver |
-| `TURB_NAT_VERTICAL` | caution | Vertical dead zone > 600 mm | Onset of turbulent buoyancy; consider transient |
-| `PLASTIC_BIOT_MARGINAL` | info | Non-metal Biot ≥ 0.1 | 3D solid mesh required (not critical) |
-| `SOLVER_TRANSIENT_RECOMMENDED` | warning | Turbulent natural convection flagged | Strongly consider transient analysis |
-| `LOW_VELOCITY_HIGH_DT` | info | Low forced velocity with high temp rise | Verify zone velocity is realistic |
+<!-- warning-codes:begin -->
+| Code | Severity | Meaning |
+|---|---|---|
+| `SURFACE_DEFAULTED` | caution | A surface given neither a treatment nor an emissivity took the material-class emissivity. |
+| `SHIELD_INPUT_DEFAULTED` | caution | A shield input (t_exh_K, h_gap, f12) took its default. |
+| `H_CORRELATION_FALLBACK` | caution | The h correlation raised; the zone's static h was used instead. |
+| `FILM_TEMP_OUT_OF_RANGE` | caution | Air properties were evaluated outside their fitted 250-700 K range. |
+| `SHIELD_NOT_CONVERGED` | warning | The shield solve stopped at its iteration limit. |
+| `TRANSIENT_CONFLICT` | warning or caution | The time step cannot integrate the governing element (a warning for an explicit scheme, a caution for an implicit one); the warning names a remedy. |
+| `NO_FINITE_SIZE` | warning | No constraint produced a finite element size. |
+| `SERVICE_TEMP_EXCEEDED` | warning | The part's temperature is above its material's service limit (t_service_max_K). |
+| `TURB_NAT_HORIZ_UP` | warning | A horizontal hot-side-up dead-zone part longer than 150 mm: natural convection is likely turbulent. |
+| `TURB_NAT_VERTICAL` | caution | A vertical dead-zone part longer than 600 mm: natural convection may be turbulent. |
+| `PLASTIC_BIOT_MARGINAL` | caution or warning | A non-metal part's Biot number is near (caution) or above (warning) 0.1. |
+| `SOLVER_TRANSIENT_RECOMMENDED` | warning | The solver advisory recommends a transient solve. |
+| `LOW_VELOCITY_HIGH_DT` | caution | Low forced velocity with a large surface temperature rise: buoyancy may matter. |
+<!-- warning-codes:end -->
 
 ---
 
@@ -405,9 +442,11 @@ Run: `python -m examples.batch_example`
 
 | Error | Cause | Fix |
 |---|---|---|
-| `KeyError: "Unknown material 'X'"` | Typo in material name | Use `list_materials()` to see available names |
-| `KeyError: "Unknown surface treatment 'X'"` | Typo in surface name | Use `list_surface_treatments()` |
-| `KeyError: "Unknown convection zone 'X'"` | Typo in zone name | Use `list_zones()` or check legacy aliases |
+| `PartInputError: Unknown material 'X' (part ..., key 'material')` | Typo in material name | Use `list_materials()`, or `resolve_material()` for a common spelling |
+| `PartInputError: Unknown surface treatment 'X' ...` | Typo in surface name | Use `list_surface_treatments()` |
+| `PartInputError: Unknown convection zone 'X' ...` | Typo in zone name | Use `list_zones()`, or `resolve_zone()` for a common spelling |
+| `PartInputError: Unknown key 'X' ...` | A key the schema does not declare (a misspelt key) | Check [`integration.md`](integration.md); prefix your own keys with `x_` |
+| `PartInputError: thickness_mm must be > 0 mm, got ...` | A value outside its range | `validate_part_input(part)` lists every problem at once |
 | `ValueError: "Provide either (h_in, h_out) or h_total"` | Shield solver missing HTC | Supply both `h_in` and `h_out` or single `h_total` |
 | `AttributeError: 'NoneType'` in transient | Missing `k`, `rho`, `cp` for material | Verify material is in `MATERIALS` dict; check spelling |
 | Mesh size = `inf` or NaN | q_total = 0 W/m² (no heat transfer) | Check temperature difference is non-zero |

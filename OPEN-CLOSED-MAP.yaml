@@ -22,10 +22,10 @@ generated_by: "maintainer tooling"
 
 # counts describe the MAP (entries per bucket), not the tree.
 counts:
-  open: 10
+  open: 11
   closed: 0
   neutral: 12
-  total: 22
+  total: 23
 
 rules:
   - id: R1
@@ -67,6 +67,11 @@ entries:
     bucket: open
     basis: "OPEN: the mesh-sizing library (R3)"
     extract_to: null
+  - path: docs/integration.md
+    bucket: open
+    basis: "OPEN: the mesh-sizing library (R3)"
+    extract_to: null
+    notes: "The integrator guide: the input and result schemas, the class taxonomy, BOM files."
   - path: docs/math_derivations.md
     bucket: open
     basis: "OPEN: the mesh-sizing library (R3)"
