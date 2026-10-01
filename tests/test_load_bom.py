@@ -126,6 +126,16 @@ class TestCsv:
         assert [(p["part_id"], p["bom_row"]) for p in parts] == [
             ("F-1", 3), ("F-2", 5)]
 
+    def test_a_row_spanning_lines_gets_the_line_it_ends_on(self, tmp_path):
+        # A quoted value may hold a line break; the row then spans lines.
+        text = ("part_id,component_class,convection_zone,x_note\n"
+                'F-1,fluid,front_end_edges,"two\nlines"\n'
+                "F-2,fluid,cabin_tunnel,\n")
+        parts = load_bom(_write(tmp_path, "span.csv", text))
+        assert [(p["part_id"], p["bom_row"]) for p in parts] == [
+            ("F-1", 3), ("F-2", 4)]
+        assert parts[0]["x_note"].split() == ["two", "lines"]
+
     def test_an_unknown_column_is_a_problem_of_every_row(self, tmp_path):
         text = ("part_id,component_class,convection_zone,velocity\n"
                 "F-1,fluid,front_end_edges,3\n"

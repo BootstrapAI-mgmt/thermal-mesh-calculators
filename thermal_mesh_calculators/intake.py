@@ -447,8 +447,8 @@ def _csv_cell(key: str, text: str):
 
 
 def _csv_records(text: str, name: str) -> list:
-    """(row, values, problems) per data row; the row is the record's line
-    in the file, the header being line 1."""
+    """(row, values, problems) per data row; the row is the line the record
+    ends on, the header being line 1."""
     reader = csv.reader(io.StringIO(text, newline=""))
     try:
         header = [cell.strip() for cell in next(reader)]
@@ -544,9 +544,9 @@ def load_bom(source, fmt: Optional[str] = None,
     -------
     list of dict — one part dict per data row, in file order.  Each
     carries ``bom_row``: the row's line in a CSV file (the header is line
-    1; a value spanning lines gives its last line), or the element's
-    1-based position in a JSON array.  A row with problems also carries
-    ``bom_errors``.  Rows of empty cells are skipped.
+    1; a row whose quoted value holds a line break gets the line it ends
+    on), or the element's 1-based position in a JSON array.  A row with
+    problems also carries ``bom_errors``.  Rows of empty cells are skipped.
 
     Problem codes a row can carry: those of validate_part_input(), and
     DUPLICATE_PART_ID (a part_id an earlier row uses), MALFORMED_ROW (more

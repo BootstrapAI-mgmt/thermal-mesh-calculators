@@ -393,8 +393,9 @@ part objects, or an object with a `parts` array and an optional
 `schema_version`) into part dicts for `process_batch()`. It reads every row,
 checks it against the part schema and resolves the material and zone names;
 a bad row is neither dropped nor the end of the load. Every part carries
-`bom_row` (its line in a CSV file, the header being line 1; its position in a
-JSON array), and a bad row carries `bom_errors`, every problem it has.
+`bom_row` (its line in a CSV file, the header being line 1, or the line it ends
+on when a quoted value holds a line break; its position in a JSON array), and a
+bad row carries `bom_errors`, every problem it has.
 
 ```pycon
 >>> text = (

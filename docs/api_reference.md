@@ -1726,8 +1726,9 @@ def load_bom(source, fmt: Optional[str] = None, resolve_names: bool = True) -> l
 
 **Returns:**
 - `list`: One part dict per data row, in file order, each with `bom_row` (its line in
-  a CSV file, the header being line 1; its position in a JSON array); a row with
-  problems also carries `bom_errors`. Rows of empty cells are skipped.
+  a CSV file, the header being line 1, or the line it ends on when a quoted value
+  holds a line break; its position in a JSON array); a row with problems also
+  carries `bom_errors`. Rows of empty cells are skipped.
 
 **Raises:**
 - `ValueError`: For a file that is not a BOM at all (not UTF-8, not valid JSON, a JSON

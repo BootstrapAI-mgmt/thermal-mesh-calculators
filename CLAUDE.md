@@ -52,12 +52,12 @@ tests/
     test_open_closed_map.py     # 18 tests — OPEN-CLOSED-MAP.yaml schema + checker (not physics)
     test_release_statements.py  # 32 tests — version pins, tag links, "On PyPI since" vs CHANGELOG, post-releases, the documented test counts (not physics)
     test_input_schema.py        # 100 tests — the input schema held to process_part key by key and class by class, the census of keys read, refused inputs
-    test_load_bom.py            # 28 tests — load_bom: CSV and JSON, every bad row reported, good rows sized
+    test_load_bom.py            # 29 tests — load_bom: CSV and JSON, every bad row reported, good rows sized
     test_names.py               # 55 tests — material and zone aliases, component class inference
     test_from_props.py          # 111 tests — sizing from explicit properties (all 43 materials), fluid regions, service limits
     test_result_schema.py       # 28 tests — the result schema, the warning registry, the docs' key tables and examples, stdlib-only imports
     conftest.py                 # checks every result the suite produces against the result schema
-                                # 789 tests total
+                                # 790 tests total
 ```
 
 ### Design Decisions
@@ -168,7 +168,7 @@ Emissivity fallback logic: non-metals → 0.90, aluminium → 0.30, other metals
 - [x] Automatic batch warnings from parametric study thresholds (v0.3)
 - [x] Parametric regime crossover studies (analysis/ directory)
 - [x] 11 worked automotive examples with verified output
-- [x] 739 pytest unit tests with analytical verification and energy balance closure
+- [x] 740 pytest unit tests with analytical verification and energy balance closure
 - [x] Inputs checked (unreleased; CHANGELOG `[Unreleased]`): unknown part names raise `PartInputError` naming the allowed set, physical inputs are range-guarded, and defaulted or extrapolated inputs, shield non-convergence and transient conflicts come back as coded warnings
 - [x] Part intake and result contract (unreleased; CHANGELOG `[Unreleased]`): versioned input and result schemas with standard-library validators (`schema.py`), every key checked before sizing and unknown keys refused, `load_bom()` for CSV and JSON reporting every problem of every row, `process_part_from_props()`, a `fluid` class sized by its boundary layer, material and zone aliases, `infer_component_class()`, optional `t_service_max_K` and `source` fields on material records (no values filled in), and `docs/integration.md`
 - [x] Full mathematical derivation documentation (docs/math_derivations.md, Sections 1–14)
@@ -270,7 +270,7 @@ CI runs all four on every push and pull request (ruff and mypy at pinned version
 and also installs the package with `pip install .` and imports it from outside the
 checkout.
 
-789 tests across 19 test files (739 physics, input-validation and contract + 18 for the open/closed map checker + 32 for the release statements and the documented test counts).
+790 tests across 19 test files (740 physics, input-validation and contract + 18 for the open/closed map checker + 32 for the release statements and the documented test counts).
 Test strategy:
 - Hand-computed analytical solutions for known inputs
 - Edge cases (zero flux, zero emissivity, pure convection/radiation)
