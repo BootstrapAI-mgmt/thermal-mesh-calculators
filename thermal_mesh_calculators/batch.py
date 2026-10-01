@@ -6,18 +6,31 @@ Accepts a list of component definitions (dicts) and runs all applicable
 calculators for each component, returning a consolidated results table.
 
 This is the automation entry point for processing hundreds to thousands
-of parts from a BOM or component spreadsheet.
+of parts from a BOM or component spreadsheet; intake.load_bom() reads one
+from a CSV or JSON file.
+
+Every key a part or project dict may carry is declared in
+schema.PART_SCHEMA and schema.PROJECT_SCHEMA, with its type, range,
+unit, the component classes that read it and its default, and every
+result conforms to schema.RESULT_SCHEMA.  docs/integration.md walks
+through them.
 
 Minimum per-part input (6 fields):
     part_id           — unique identifier (string)
     material          — material name (key into MATERIALS)
     component_class   — one of: "exhaust", "exhaust_adjacent", "structural",
-                        "shield", "multilayer_shield" (the keys of
-                        CLASS_DEFAULTS)
+                        "shield", "multilayer_shield", "fluid" (the keys
+                        of CLASS_DEFAULTS)
     convection_zone   — key into CONVECTION_ZONES (zones.py)
     thickness_mm      — wall thickness in mm
     t_surf_K          — surface temperature estimate in Kelvin
                         (ignored for shield classes — solved iteratively)
+
+A fluid region (component_class "fluid") gives part_id, the class and its
+flow: convection_zone, or both velocity_ms and bl_regime.  It is sized by
+the boundary-layer constraint alone and takes no material.
+process_part_from_props() sizes a part from material properties given
+explicitly (k, rho, cp, ...) instead of a MATERIALS name.
 
 Surface treatment (key into SURFACE_TREATMENTS), or an emissivity directly:
     surface / epsilon            — non-shield classes
@@ -28,10 +41,12 @@ Surface treatment (key into SURFACE_TREATMENTS), or an emissivity directly:
     A surface given neither falls back to a material-class emissivity and
     is reported as a SURFACE_DEFAULTED warning.
 
-Every name is checked before anything is computed: an unknown or missing
-material or component class, an unknown convection zone and an unknown
-surface treatment raise PartInputError, whose message names the part, the
-key and the allowed set.
+Every key is checked before anything is computed: an unknown or missing
+material or component class, an unknown convection zone, an unknown
+surface treatment, a value of the wrong type or outside its range, a
+required key missing and a key no schema declares raise PartInputError,
+whose message names the part, the key and the allowed set.  Keys starting
+with "x_" are the caller's own: they are carried through and never read.
 
 Optional per-part overrides:
     h_override        — use specific h instead of zone lookup (W/m^2 K)
@@ -70,7 +85,7 @@ Project-level defaults (set once, applied to all parts):
     allowable_flux_error — radiation flux error tolerance (W/m^2)
 """
 
-from typing import Any, Dict, cast
+from typing import Any, Dict, List, Optional, cast
 
 from thermal_mesh_calculators.conduction import BoundaryDrivenConductionCalculator
 from thermal_mesh_calculators.convection import ConvectionMeshCalculator
@@ -84,7 +99,6 @@ from thermal_mesh_calculators.transient import (
     _bound_text,
 )
 from thermal_mesh_calculators.zones import (
-    CONVECTION_ZONES,
     get_zone,
     get_conservative_h,
     estimate_spatial_gradient,
@@ -95,6 +109,14 @@ from thermal_mesh_calculators.h_estimator import (
     H_EXTERNAL_MAX,
 )
 from thermal_mesh_calculators.boundary_layer import BoundaryLayerCalculator
+from thermal_mesh_calculators.schema import (
+    FLUID_CLASSES,
+    RESULT_SCHEMA_VERSION,
+    SHIELD_CLASSES,
+    validate_material_record,
+    validate_part_input,
+    validate_project_input,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -103,17 +125,27 @@ from thermal_mesh_calculators.boundary_layer import BoundaryLayerCalculator
 
 class PartInputError(KeyError, ValueError):
     """
-    A part dict names something the library does not know.
+    A part dict, or its project, carries something the library refuses.
 
-    Raised by process_part() before anything is computed: for a missing or
-    unknown material or component class, an unknown convection zone, a zone
-    the part needs but does not give, and an unknown surface treatment.
-    The message names the part, the key and the allowed set.
+    Raised by process_part() before anything is computed: for a missing
+    or unknown material or component class, an unknown convection zone, a
+    zone the part needs but does not give, an unknown surface treatment,
+    a value of the wrong type or out of its range, a key no schema
+    declares, and an unsupported schema_version.  The message names the
+    part, the key and the allowed set or range.
+
+    ``problems`` lists every problem found, each a dict with key, code
+    and reason (schema.PROBLEM_CODES); a message with more than one
+    problem lists each on a line of its own.
 
     It subclasses KeyError, which these lookups raised before the check
     existed (``except KeyError`` keeps working), and ValueError, which is
     what it is: a bad value in an input dict.
     """
+
+    def __init__(self, message: str = "", problems: Optional[list] = None) -> None:
+        super().__init__(message)
+        self.problems: List[Dict[str, Any]] = list(problems or [])
 
     def __str__(self) -> str:
         # KeyError.__str__ shows repr() of the message; show the message.
@@ -674,7 +706,7 @@ def _estimate_h_from_zone(zone_name: str, t_surf: float, t_fluid: float,
 #  Defaults per component class
 # ---------------------------------------------------------------------------
 
-CLASS_DEFAULTS = {
+CLASS_DEFAULTS: Dict[str, Dict[str, Optional[float]]] = {
     "exhaust": {
         "max_dt": 10.0,
         "allowable_flux_error": 500.0,
@@ -694,6 +726,12 @@ CLASS_DEFAULTS = {
     "multilayer_shield": {
         "max_dt": 15.0,
         "allowable_flux_error": 500.0,
+    },
+    # A fluid region is sized by its boundary layer alone: no element
+    # temperature step and no radiation tolerance apply.
+    "fluid": {
+        "max_dt": None,
+        "allowable_flux_error": None,
     },
 }
 
@@ -841,77 +879,46 @@ def _generate_warnings(part: dict, result: dict, project: dict) -> list:
 # ---------------------------------------------------------------------------
 #  Input validation
 # ---------------------------------------------------------------------------
-
-_SHIELD_CLASSES = ("shield", "multilayer_shield")
-_ZONE_KEYS = ("convection_zone", "convection_zone_in", "convection_zone_out")
-
-
-def _known(value, names) -> bool:
-    """True when value is a string naming a key of names."""
-    return isinstance(value, str) and value in names
+#
+#  What process_part() refuses is what schema.validate_part_input() and
+#  schema.validate_project_input() report: the checks are those functions.
 
 
-def _part_input_error(what: str, part: dict, key: str, names,
-                      hint: str = "") -> PartInputError:
-    """PartInputError naming the part, the key and the allowed set."""
-    pid = part.get("part_id", "?")
-    if key in part:
-        head = f"Unknown {what} {part[key]!r} (part {pid!r}, key {key!r})."
+def _prefixed(problems: list, prefix: str) -> list:
+    """Problems of a project or a material record, their keys prefixed so
+    they cannot be read as part keys (t_fluid_K is both)."""
+    return [dict(p, key=(prefix + "." + p["key"]) if p["key"] else prefix)
+            for p in problems]
+
+
+def _input_error(part, problems: list) -> PartInputError:
+    """PartInputError listing every problem; one problem is its own
+    message."""
+    pid = part.get("part_id", "?") if isinstance(part, dict) else "?"
+    if len(problems) == 1:
+        message = problems[0]["reason"]
     else:
-        head = f"Missing {what}: part {pid!r} has no {key!r} key."
-    if hint:
-        head = head + " " + hint
-    return PartInputError(
-        f"{head} Available: {', '.join(sorted(names))}"
-    )
+        message = (f"{len(problems)} problems with part {pid!r}:"
+                   + "".join("\n  - " + p["reason"] for p in problems))
+    row = part.get("bom_row") if isinstance(part, dict) else None
+    if isinstance(part, dict) and part.get("bom_errors") and row is not None:
+        message = f"BOM row {row} did not load: {message}"
+    return PartInputError(message, problems)
 
 
-def _validate_part(part: dict) -> None:
+def _check_inputs(part, project, material_from_table: bool = True,
+                  record: Optional[dict] = None) -> None:
     """
-    Check every name a part dict gives, before anything is computed.
-
-    Raises PartInputError for:
-        - a missing or unknown component_class (keys of CLASS_DEFAULTS);
-        - a missing or unknown material (keys of MATERIALS);
-        - any of convection_zone / convection_zone_in / convection_zone_out
-          naming a zone that is not in CONVECTION_ZONES;
-        - a zone the part needs but does not give: convection_zone for a
-          non-shield part without h_override; for a shield side, its
-          convection_zone_<side> or convection_zone, unless
-          h_<side>_override is given;
-        - any surface key (surface, surface_in, surface_out, surface_g1,
-          surface_g2) naming a treatment not in SURFACE_TREATMENTS.
+    Check a part, its project and (process_part_from_props) its material
+    record before anything is computed; raise PartInputError listing
+    every problem found.
     """
-    if not _known(part.get("component_class"), CLASS_DEFAULTS):
-        raise _part_input_error("component class", part, "component_class",
-                                CLASS_DEFAULTS)
-    if not _known(part.get("material"), MATERIALS):
-        raise _part_input_error("material", part, "material", MATERIALS)
-
-    for key in _ZONE_KEYS:
-        if key in part and not _known(part[key], CONVECTION_ZONES):
-            raise _part_input_error("convection zone", part, key,
-                                    CONVECTION_ZONES)
-    if part["component_class"] in _SHIELD_CLASSES:
-        for side in ("in", "out"):
-            zone_key = "convection_zone_" + side
-            if (zone_key not in part and "convection_zone" not in part
-                    and "h_" + side + "_override" not in part):
-                raise _part_input_error(
-                    "convection zone", part, zone_key, CONVECTION_ZONES,
-                    hint=(f"Give '{zone_key}', 'convection_zone' or "
-                          f"'h_{side}_override'."),
-                )
-    elif "convection_zone" not in part and "h_override" not in part:
-        raise _part_input_error(
-            "convection zone", part, "convection_zone", CONVECTION_ZONES,
-            hint="Give 'convection_zone' or 'h_override'.",
-        )
-
-    for key in _EPS_KEY_FOR_SURFACE:
-        if key in part and not _known(part[key], SURFACE_TREATMENTS):
-            raise _part_input_error("surface treatment", part, key,
-                                    SURFACE_TREATMENTS)
+    problems = validate_part_input(part, material_from_table=material_from_table)
+    if record is not None:
+        problems += _prefixed(validate_material_record(record), "properties")
+    problems += _prefixed(validate_project_input(project), "project")
+    if problems:
+        raise _input_error(part, problems)
 
 
 def _shield_solver_options(part: dict, project: dict) -> dict:
@@ -1053,7 +1060,7 @@ def _shield_side_h(part: dict) -> tuple:
     """(h_in, h_out) for a shield: the overrides, else each side's zone."""
     zone_in = part.get("convection_zone_in", part.get("convection_zone"))
     zone_out = part.get("convection_zone_out", part.get("convection_zone"))
-    # _validate_part has checked that a side without an override has a zone.
+    # The input check has made sure a side without an override has a zone.
     h_in = (part["h_in_override"] if "h_in_override" in part
             else get_conservative_h(cast(str, zone_in)))
     h_out = (part["h_out_override"] if "h_out_override" in part
@@ -1072,9 +1079,16 @@ def process_part(part: dict, project: dict) -> dict:
     Parameters
     ----------
     part : dict
-        Per-part definition.  Required keys:
+        Per-part definition.  Every key it may carry is declared in
+        schema.PART_SCHEMA (type, range, unit, the classes that read it,
+        default).  Required keys:
             part_id, material, component_class, convection_zone,
             thickness_mm, t_surf_K
+        A shield gives convection_zone_in / convection_zone_out (or
+        convection_zone, or h_in_override / h_out_override) and no
+        t_surf_K; a fluid region (component_class "fluid") gives part_id,
+        component_class and convection_zone (or both velocity_ms and
+        bl_regime), and no material or thickness.
         Surface keys (a surface given neither a treatment nor an emissivity
         falls back to a material-class value, reported as a
         SURFACE_DEFAULTED warning):
@@ -1083,16 +1097,19 @@ def process_part(part: dict, project: dict) -> dict:
             surface_g2 / eps_g2 (two-layer shields, gap faces)
         Optional keys:
             h_override, h_in_override, h_out_override,
-            epsilon (direct override), eps_in, eps_out, eps_g1, eps_g2,
-            surface_in, surface_out, surface_g1, surface_g2,
             t_exh_K, h_gap, f12, convection_zone_in, convection_zone_out,
             t_fluid_K (this part's fluid temperature, e.g. exhaust gas
             inside a pipe; overrides the project's),
             shield_max_iter (shield solve iteration limit; also a project
-            key)
+            key), char_length_mm, max_dt, allowable_flux_error,
+            radius_mm, velocity_ms, bl_regime, bl_y_plus,
+            bl_growth_ratio, bl_ar_max_prism, bl_fraction,
+            schema_version (the input schema the part was written for;
+            1), and keys starting with "x_" (the caller's own, never
+            read)
 
     project : dict
-        Project-level defaults.  Expected keys:
+        Project-level defaults (schema.PROJECT_SCHEMA).  Required keys:
             t_fluid_K, t_surr_K
         The part's fluid temperature (its own t_fluid_K, else the
         project's) is the single temperature used for the convective HTC
@@ -1100,36 +1117,206 @@ def process_part(part: dict, project: dict) -> dict:
         flux q'' alike.
         Optional keys:
             max_dt, dt, fo_max, tau_bc, safety_factor, transient_scheme,
-            allowable_flux_error, t_exh_K (global exhaust temp)
+            allowable_flux_error, t_exh_K (global exhaust temp),
+            shield_max_iter, bl_regime, bl_y_plus, bl_growth_ratio,
+            bl_ar_max_prism, bl_fraction, schema_version
 
     Returns
     -------
-    dict with keys:
+    dict with keys (schema.RESULT_SCHEMA; schema.validate_result()
+    checks one):
+        schema_version      — the result schema version (1)
         part_id             — echoed back
-        material            — echoed back
+        material            — echoed back (None for a fluid region)
         component_class     — echoed back
         t_fluid_K           — the fluid temperature used for h and q'' (K)
         t_fluid_source      — "part" or "project": where it came from
-        h_used              — the h value used (W/m^2 K)
+        h_used              — the h value used (W/m^2 K; a dict per face
+                              for shields; None for a fluid region)
         conduction          — dict from conduction calculator (or None)
         biot                — dict from Biot number (or None)
         radiation           — dict from radiation calculator (or None)
         shield              — dict from shield solver (or None)
         transient           — dict from transient calculator (or None)
+        boundary_layer      — dict from the boundary-layer calculator,
+                              when that constraint ran
         governing_dx_mm     — the smallest (most restrictive) mesh size
         governing_constraint — which calculator produced it
+        all_constraints     — every candidate, {"dx_mm", "source"}
+        bom_row             — the part's, when it has one
         warnings            — list of coded warnings (code, severity,
-                              message; input warnings also carry "key")
+                              message; input warnings also carry "key");
+                              the codes are schema.WARNING_CODES
 
     Raises
     ------
     PartInputError (a KeyError and a ValueError)
-        Before anything is computed, for a missing or unknown material or
-        component class, an unknown or missing convection zone, or an
-        unknown surface treatment (see _validate_part).  The message names
-        the part, the key and the allowed set.
+        Before anything is computed, for every problem schema.
+        validate_part_input() and schema.validate_project_input() find:
+        a missing or unknown material, component class, convection zone
+        or surface treatment (the message names the part, the key and
+        the allowed set), a value of the wrong type or out of range, a
+        required key missing, a key no schema declares, an unsupported
+        schema_version.  Its ``problems`` attribute lists them (key,
+        code, reason); project keys are prefixed "project.".
     """
-    _validate_part(part)
+    _check_inputs(part, project)
+    if part["component_class"] in FLUID_CLASSES:
+        return _size_fluid(part, project)
+    return _size_solid(part, project, MATERIALS[part["material"]],
+                       part["material"])
+
+
+def process_part_from_props(part: dict, project: dict, *,
+                            k: float, rho: float, cp: float,
+                            description: Optional[str] = None,
+                            t_service_max_K: Optional[float] = None,
+                            source: Optional[str] = None) -> dict:
+    """
+    Run all applicable mesh sizing calculators for a part whose material
+    properties are given explicitly instead of named.
+
+    For a caller that holds its own property data.  The keyword arguments
+    are the fields of a material record (schema.MATERIAL_RECORD_SCHEMA),
+    so an entry of MATERIALS can be passed whole:
+    ``process_part_from_props(part, project, **MATERIALS["steel_mild"])``
+    returns what ``process_part(dict(part, material="steel_mild"),
+    project)`` returns.
+
+    Parameters
+    ----------
+    part : dict
+        As for process_part(), except that ``material`` is optional and is
+        a label of the caller's own: it is never looked up.  It is echoed
+        into the result, and two rules read its spelling: the fallback
+        emissivity of a surface given neither a treatment nor an
+        emissivity, and the non-metal Biot warning (see
+        docs/integration.md).
+    project : dict
+        As for process_part().
+    k : float     — thermal conductivity (W/m K)
+    rho : float   — density (kg/m^3)
+    cp : float    — specific heat (J/kg K)
+    description : str, optional — what the material is
+    t_service_max_K : float, optional
+        The material's service temperature limit (K).  A part sized above
+        it gets a SERVICE_TEMP_EXCEEDED warning.
+    source : str, optional — where the values come from
+
+    Returns
+    -------
+    dict — as process_part().  A fluid region takes no material
+    properties; they are checked, and not used.
+
+    Raises
+    ------
+    PartInputError
+        As process_part(), and for a property out of its range (keys
+        prefixed "properties.").
+    """
+    record: Dict[str, Any] = {"k": k, "rho": rho, "cp": cp}
+    for name, value in (("description", description),
+                        ("t_service_max_K", t_service_max_K),
+                        ("source", source)):
+        if value is not None:
+            record[name] = value
+    _check_inputs(part, project, material_from_table=False, record=record)
+    if part["component_class"] in FLUID_CLASSES:
+        return _size_fluid(part, project)
+    return _size_solid(part, project, record, part.get("material"))
+
+
+# Boundary-layer inputs: the part's, else the project's, else these.
+_BL_DEFAULTS = {
+    "bl_y_plus": 30.0,
+    "bl_growth_ratio": 1.2,
+    "bl_ar_max_prism": 5.0,
+    "bl_fraction": 0.3,
+}
+
+
+def _bl_input(part: dict, project: dict, key: str) -> float:
+    return part.get(key, project.get(key, _BL_DEFAULTS[key]))
+
+
+def _size_fluid(part: dict, project: dict) -> dict:
+    """
+    Size a fluid region: the boundary-layer constraint alone.
+
+    No conduction, lateral, Biot, radiation, shield, transient or
+    curvature constraint runs: they are solid-side constraints.  The
+    velocity is the part's velocity_ms, else the zone's; the regime is
+    the part's or the project's bl_regime, else the zone's (a forced zone
+    is "external_forced", any other "mixed_unknown"), else
+    "external_forced" when the velocity is above zero.  The wall's
+    t_surf_K, when given, sets the film temperature and the buoyancy
+    velocity.
+    """
+    if "t_fluid_K" in part:
+        t_fluid, t_fluid_source = part["t_fluid_K"], "part"
+    else:
+        t_fluid, t_fluid_source = project["t_fluid_K"], "project"
+    zone = get_zone(part["convection_zone"]) if "convection_zone" in part else {}
+    velocity = part.get("velocity_ms")
+    if velocity is None:
+        velocity = zone.get("velocity_ms", 0.0)
+    regime = part.get("bl_regime", project.get("bl_regime"))
+    if regime is None:
+        if zone:
+            regime = ("external_forced" if zone.get("regime") == "forced"
+                      else "mixed_unknown")
+        else:
+            regime = "external_forced" if velocity > 0 else "mixed_unknown"
+
+    bl = BoundaryLayerCalculator.estimate_mesh(
+        U=velocity,
+        x=part.get("char_length_mm", 100.0) / 1000.0,
+        t_fluid=t_fluid,
+        y_plus_target=_bl_input(part, project, "bl_y_plus"),
+        growth_ratio=_bl_input(part, project, "bl_growth_ratio"),
+        regime=regime,
+        ar_max_prism=_bl_input(part, project, "bl_ar_max_prism"),
+        bl_fraction=_bl_input(part, project, "bl_fraction"),
+        t_surf=part.get("t_surf_K", 0.0),
+    )
+    dx = bl["max_dx_surface_mm"]
+    result: Dict[str, Any] = {
+        "schema_version": RESULT_SCHEMA_VERSION,
+        "part_id": part["part_id"],
+        "material": None,
+        "component_class": part["component_class"],
+        "t_fluid_K": t_fluid,
+        "t_fluid_source": t_fluid_source,
+        "h_used": None,
+        "conduction": None,
+        "biot": None,
+        "radiation": None,
+        "shield": None,
+        "transient": None,
+        "solver_advisory": None,
+        "boundary_layer": bl,
+        "governing_dx_mm": dx,
+        "governing_constraint": "aero_boundary_layer",
+        "all_constraints": [{"dx_mm": dx, "source": "aero_boundary_layer"}],
+    }
+    if "bom_row" in part:
+        result["bom_row"] = part["bom_row"]
+    warnings = []
+    if not bl["film_in_range"]:
+        warnings.append(_film_temperature_warning(
+            [("the boundary-layer sizes", bl["t_film_K"])]))
+    result["warnings"] = warnings + _generate_warnings(part, result, project)
+    return result
+
+
+def _size_solid(part: dict, project: dict, mat: dict,
+                mat_label: Optional[str]) -> dict:
+    """
+    Size a solid part from its material record ``mat`` (k, rho, cp and,
+    when given, t_service_max_K).  ``mat_label`` is the material name
+    echoed into the result: the MATERIALS key, or the caller's own label
+    (None when it gives none).  The inputs have been checked.
+    """
     input_warnings = []
     solve_warnings = []
     film_out_of_range = []   # (what, film temperature) pairs
@@ -1142,7 +1329,6 @@ def process_part(part: dict, project: dict) -> dict:
         return eps_value
 
     pid = part["part_id"]
-    mat = get_material(part["material"])
     cls = part["component_class"]
     # One fluid temperature per part, for h and q'' alike: the part's own
     # t_fluid_K when given (e.g. exhaust gas inside a pipe), else the
@@ -1153,14 +1339,16 @@ def process_part(part: dict, project: dict) -> dict:
         t_fluid, t_fluid_source = project["t_fluid_K"], "project"
     t_surr = project["t_surr_K"]
 
-    # Resolve class defaults (explicit None means "use class default")
+    # Resolve class defaults (explicit None means "use class default"; the
+    # input check has refused zero and negative values, and only the fluid
+    # class, which never reaches here, has no defaults).
     class_def = CLASS_DEFAULTS.get(cls, CLASS_DEFAULTS["structural"])
-    max_dt = (part.get("max_dt")
-              or project.get("max_dt")
-              or class_def["max_dt"])
-    flux_err = (part.get("allowable_flux_error")
-                or project.get("allowable_flux_error")
-                or class_def["allowable_flux_error"])
+    max_dt = cast(float, part.get("max_dt")
+                  or project.get("max_dt")
+                  or class_def["max_dt"])
+    flux_err = cast(float, part.get("allowable_flux_error")
+                    or project.get("allowable_flux_error")
+                    or class_def["allowable_flux_error"])
 
     k = mat["k"]
     rho = mat["rho"]
@@ -1175,8 +1363,9 @@ def process_part(part: dict, project: dict) -> dict:
         eps = None  # will be set per-surface in shield branches
 
     result = {
+        "schema_version": RESULT_SCHEMA_VERSION,
         "part_id": pid,
-        "material": part["material"],
+        "material": mat_label,
         "component_class": cls,
         "t_fluid_K": t_fluid,
         "t_fluid_source": t_fluid_source,
@@ -1331,6 +1520,27 @@ def process_part(part: dict, project: dict) -> dict:
             dx_candidates.append((lateral["max_dx_mm"], "lateral_gradient"))
 
     # ------------------------------------------------------------------
+    #  Service temperature limit (when the material record gives one)
+    # ------------------------------------------------------------------
+    limit = mat.get("t_service_max_K")
+    if limit is not None and t_surf > limit:
+        if mat_label:
+            whose = f"material {mat_label!r}"
+        else:
+            whose = repr(mat.get("description", "the given properties"))
+        what = ("solved shield temperature" if cls in SHIELD_CLASSES
+                else "surface temperature")
+        solve_warnings.append({
+            "code": "SERVICE_TEMP_EXCEEDED",
+            "severity": "warning",
+            "message": (
+                f"The {what}, {t_surf:.1f} K, is above the service limit "
+                f"of {whose}, t_service_max_K = {limit:.1f} K. Check the "
+                f"material or the temperature."
+            ),
+        })
+
+    # ------------------------------------------------------------------
     #  Biot number (all classes)
     # ------------------------------------------------------------------
     # The branches above set h (one surface) or h_in and h_out (shields).
@@ -1423,16 +1633,10 @@ def process_part(part: dict, project: dict) -> dict:
                 bl_velocity = 0.0
 
         bl_char_len = part.get("char_length_mm", 100.0) / 1000.0
-        bl_y_plus = part.get("bl_y_plus", project.get("bl_y_plus", 30.0))
-        bl_growth = part.get(
-            "bl_growth_ratio", project.get("bl_growth_ratio", 1.2)
-        )
-        bl_ar_max = part.get(
-            "bl_ar_max_prism", project.get("bl_ar_max_prism", 5.0)
-        )
-        bl_frac = part.get(
-            "bl_fraction", project.get("bl_fraction", 0.3)
-        )
+        bl_y_plus = _bl_input(part, project, "bl_y_plus")
+        bl_growth = _bl_input(part, project, "bl_growth_ratio")
+        bl_ar_max = _bl_input(part, project, "bl_ar_max_prism")
+        bl_frac = _bl_input(part, project, "bl_fraction")
 
         # For mixed_unknown, compute buoyancy dT from surface & fluid temps
         bl_dt_buoy = 0.0
@@ -1490,6 +1694,8 @@ def process_part(part: dict, project: dict) -> dict:
     # ------------------------------------------------------------------
     #  Automatic warnings from parametric study thresholds
     # ------------------------------------------------------------------
+    if "bom_row" in part:
+        result["bom_row"] = part["bom_row"]
     result["warnings"] = (input_warnings + solve_warnings
                           + _generate_warnings(part, result, project))
 
@@ -1500,6 +1706,23 @@ def process_part(part: dict, project: dict) -> dict:
 #  Batch processor
 # ---------------------------------------------------------------------------
 
+def _error_result(part, message: str, problems: list) -> dict:
+    """process_batch()'s result for a part that could not be sized."""
+    pid = part.get("part_id") if isinstance(part, dict) else None
+    result: Dict[str, Any] = {
+        "schema_version": RESULT_SCHEMA_VERSION,
+        "part_id": pid if isinstance(pid, str) and pid else "UNKNOWN",
+        "error": message,
+        "problems": [dict(p) for p in problems],
+        "governing_dx_mm": None,
+        "governing_constraint": None,
+    }
+    row = part.get("bom_row") if isinstance(part, dict) else None
+    if isinstance(row, int) and not isinstance(row, bool):
+        result["bom_row"] = row
+    return result
+
+
 def process_batch(parts: list, project: dict) -> list:
     """
     Process a list of part definitions and return mesh sizing results.
@@ -1507,26 +1730,42 @@ def process_batch(parts: list, project: dict) -> list:
     Parameters
     ----------
     parts : list of dict
-        Each dict is a part definition (see process_part).
+        Each dict is a part definition (see process_part), or a row
+        returned by load_bom().
     project : dict
         Project-level defaults (see process_part).
 
     Returns
     -------
-    list of dict — one result per part, in input order.
+    list of dict — one result per part, in input order.  A part that
+    cannot be sized gets an error result instead of raising (the
+    ERROR_RESULT_SCHEMA of schema.py):
+        part_id             — the part's, or "UNKNOWN"
+        error               — the message
+        problems            — list of dicts: key, code, reason; the
+                              PartInputError's problems, or one
+                              CALCULATION_FAILED entry when a calculator
+                              raised
+        governing_dx_mm, governing_constraint — None
+        bom_row             — the part's, when it has one
+        schema_version      — as on every result
+    A row load_bom() could not load is such a part: its result lists
+    every problem the row has.  A sized part's result has error None.
     """
     results = []
     for part in parts:
         try:
             r = process_part(part, project)
             r["error"] = None
+        except PartInputError as e:
+            r = _error_result(part, str(e), e.problems or [{
+                "key": None, "code": "CALCULATION_FAILED",
+                "reason": str(e)}])
         except Exception as e:
-            r = {
-                "part_id": part.get("part_id", "UNKNOWN"),
-                "error": str(e),
-                "governing_dx_mm": None,
-                "governing_constraint": None,
-            }
+            message = str(e) or type(e).__name__
+            r = _error_result(part, message, [{
+                "key": None, "code": "CALCULATION_FAILED",
+                "reason": f"{type(e).__name__}: {message}"}])
         results.append(r)
     return results
 
@@ -1565,7 +1804,7 @@ def summary_table(results: list) -> str:
         bi_str = f"{bi_val:.4f}"
 
         lines.append(
-            f"{r['part_id']:<30s} {r['material']:<22s} "
+            f"{r['part_id']:<30s} {r.get('material') or '-':<22s} "
             f"{r['component_class']:<18s} "
             f"{dx_str:>8s}  {r['governing_constraint']:>22s}  "
             f"{bi_str:>8s}"

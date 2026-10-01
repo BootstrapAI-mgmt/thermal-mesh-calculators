@@ -43,13 +43,13 @@ tests/
     test_zones.py               # 18 tests
     test_h_estimator.py         # 41 tests — forced, natural, mixed, opposing, Richardson, advisory, film range
     test_boundary_layer.py      # 40 tests — skin friction, BL thickness, buoyancy, inflation, regimes, prism rec, ER_v
-    test_batch.py               # 92 tests — material DB, surface DB, h estimation, lateral, BL integration, input validation, warnings
+    test_batch.py               # 94 tests — material DB, surface DB, h estimation, lateral, BL integration, input validation, warnings
     test_conduction_size_wall.py # 17 tests — thickness-aware sizing, N_cells + Biot reporting
     test_fail_loud.py           # 22 tests — one planted input per formerly silent path, each failing on 0.6.2
     test_input_guards.py        # 82 tests — one planted violation per guarded input
     test_open_closed_map.py     # 18 tests — OPEN-CLOSED-MAP.yaml schema + checker (not physics)
     test_release_statements.py  # 32 tests — version pins, tag links, "On PyPI since" vs CHANGELOG, post-releases, the documented test counts (not physics)
-                                # 465 tests total
+                                # 467 tests total
 ```
 
 ### Design Decisions
@@ -160,7 +160,7 @@ Emissivity fallback logic: non-metals → 0.90, aluminium → 0.30, other metals
 - [x] Automatic batch warnings from parametric study thresholds (v0.3)
 - [x] Parametric regime crossover studies (analysis/ directory)
 - [x] 11 worked automotive examples with verified output
-- [x] 415 pytest unit tests with analytical verification and energy balance closure
+- [x] 417 pytest unit tests with analytical verification and energy balance closure
 - [x] Inputs checked (unreleased; CHANGELOG `[Unreleased]`): unknown part names raise `PartInputError` naming the allowed set, physical inputs are range-guarded, and defaulted or extrapolated inputs, shield non-convergence and transient conflicts come back as coded warnings
 - [x] Full mathematical derivation documentation (docs/math_derivations.md, Sections 1–14)
 - [x] Published to PyPI — `pip install thermal-mesh-calculators`. 0.6.1 (2026-09-16,
@@ -261,7 +261,7 @@ CI runs all four on every push and pull request (ruff and mypy at pinned version
 and also installs the package with `pip install .` and imports it from outside the
 checkout.
 
-465 tests across 14 test files (415 physics and input-validation + 18 for the open/closed map checker + 32 for the release statements and the documented test counts).
+467 tests across 14 test files (417 physics and input-validation + 18 for the open/closed map checker + 32 for the release statements and the documented test counts).
 Test strategy:
 - Hand-computed analytical solutions for known inputs
 - Edge cases (zero flux, zero emissivity, pure convection/radiation)

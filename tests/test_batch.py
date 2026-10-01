@@ -673,12 +673,31 @@ class TestInputRangesInBatch:
         assert "the boundary-layer sizes" in w["message"]
         assert r["boundary_layer"]["film_in_range"] is False
 
-    def test_failed_correlation_falls_back_loudly(self):
-        r = process_part(_make_structural_part(char_length_mm=0.0), PROJECT)
+    def test_failed_correlation_falls_back_loudly(self, monkeypatch):
+        # The correlation raising on inputs the schema accepts.  The old
+        # trigger, char_length_mm = 0, is now refused before anything is
+        # computed (the test below), so the failure is planted in the
+        # correlation itself.
+        def broken(**kwargs):
+            raise ZeroDivisionError("planted correlation failure")
+
+        monkeypatch.setattr(batch_mod, "estimate_h", broken)
+        r = process_part(_make_structural_part(), PROJECT)
         assert r["h_estimation"]["method"] == "static_lookup"
         [w] = [w for w in r["warnings"] if w["code"] == "H_CORRELATION_FALLBACK"]
-        assert "char_length must be > 0" in w["message"]
+        assert "ZeroDivisionError: planted correlation failure" in w["message"]
         assert r["h_used"] == 15.0  # engine_beside h_high, via the alias
+
+    def test_a_non_positive_characteristic_length_is_refused(self):
+        # Until the input schema, char_length_mm = 0 reached the h
+        # correlation, whose guard raised, and the batch fell back to the
+        # zone's static h with a caution.  It is now refused up front, in
+        # the guard's own words.
+        with pytest.raises(batch_mod.PartInputError) as excinfo:
+            process_part(_make_structural_part(char_length_mm=0.0), PROJECT)
+        assert str(excinfo.value) == "char_length_mm must be > 0 mm, got 0.0"
+        assert [(p["key"], p["code"]) for p in excinfo.value.problems] == [
+            ("char_length_mm", "OUT_OF_RANGE")]
 
 
 # --- The shield path: radiation constraint, gap inputs, defaults reported ---

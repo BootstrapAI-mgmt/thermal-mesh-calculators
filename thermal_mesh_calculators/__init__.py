@@ -15,6 +15,9 @@ Modules:
     h_estimator - Convective HTC from correlations (forced, natural, mixed)
     boundary_layer - Aerodynamic boundary layer mesh constraints
     batch       - Bulk component processing (BOM → mesh sizes)
+    schema      - Versioned input and result schemas, with validators
+    intake      - BOM files (CSV, JSON), material and zone aliases,
+                  component class inference
 """
 
 from thermal_mesh_calculators.conduction import BoundaryDrivenConductionCalculator
@@ -28,10 +31,35 @@ from thermal_mesh_calculators.transient import TransientMeshCalculator
 from thermal_mesh_calculators.batch import (
     process_batch,
     process_part,
+    process_part_from_props,
     summary_table,
     MATERIALS,
     SURFACE_TREATMENTS,
+    CLASS_DEFAULTS,
     PartInputError,
+)
+from thermal_mesh_calculators.schema import (
+    INPUT_SCHEMA_VERSION,
+    RESULT_SCHEMA_VERSION,
+    PART_SCHEMA,
+    PROJECT_SCHEMA,
+    MATERIAL_RECORD_SCHEMA,
+    RESULT_SCHEMA,
+    ERROR_RESULT_SCHEMA,
+    WARNING_CODES,
+    PROBLEM_CODES,
+    validate_part_input,
+    validate_project_input,
+    validate_material_record,
+    validate_result,
+)
+from thermal_mesh_calculators.intake import (
+    load_bom,
+    resolve_material,
+    resolve_zone,
+    infer_component_class,
+    MATERIAL_ALIASES,
+    ZONE_ALIASES,
 )
 from thermal_mesh_calculators.zones import (
     CONVECTION_ZONES,
