@@ -48,7 +48,10 @@ All terms on the right are either known inputs (material props, BCs) or can be e
 `h_estimator.py` (HTC from correlations — forced, natural and mixed convection,
 Richardson-number regime classification, steady-state solver advisory) ·
 `boundary_layer.py` (aerodynamic boundary layer: y+, inflation layers, surface dx) ·
-`batch.py` (BOM → mesh sizes, with 43 materials and 30 surface treatments inline).
+`batch.py` (BOM → mesh sizes, with 43 materials and 30 surface treatments inline) ·
+`schema.py` (versioned input and result schemas, and validators for them) ·
+`intake.py` (BOM files in CSV or JSON, material and zone aliases, component class
+inference).
 
 Full signatures are in [`docs/api_reference.md`](docs/api_reference.md); the
 derivations behind every constraint are in
@@ -150,6 +153,33 @@ Layer 2 can be 4.4x coarser
 
 ```
 
+### From a BOM file
+
+`load_bom()` reads a bill of materials from a CSV or JSON file into part dicts.
+Every row is checked, a bad row is reported with each of its problems instead of
+stopping the load, and the good rows are sized:
+
+```pycon
+>>> import io
+>>> from thermal_mesh_calculators import load_bom, process_batch
+>>> bom = io.StringIO(
+...     "part_id,material,component_class,convection_zone,thickness_mm,t_surf_K,surface\n"
+...     "BRK-001,Mild steel,structural,engine_beside,3.0,473.15,painted\n"
+...     "BRK-002,steel_mild,structural,engine_beside,-2,473.15,painted\n"
+... )
+>>> project = {"t_fluid_K": 353.15, "t_surr_K": 353.15}
+>>> for r in process_batch(load_bom(bom, fmt="csv"), project):
+...     print(r["bom_row"], r["part_id"], r["error"] or f"{r['governing_dx_mm']:.1f} mm")
+2 BRK-001 24.5 mm
+3 BRK-002 BOM row 3 did not load: thickness_mm must be > 0 mm, got -2.0
+
+```
+
+Every key a part or project may carry, the component classes and how a part's
+class is inferred, sizing from your own material properties
+(`process_part_from_props()`), fluid regions, material and zone aliases, and the
+versioned result schema are described in [`docs/integration.md`](docs/integration.md).
+
 ## Example Output
 
 Run `python -m examples.automotive_examples` for a full walkthrough. It prints the
@@ -206,10 +236,11 @@ Shipped since this list was first written:
       keep the zero-dependency guarantee)
 - [x] Multi-component batch report generator — `process_batch()` +
       `summary_table()`; see `examples/batch_example.py`
+- [x] Load a BOM from CSV/JSON — `load_bom()`, which reports every problem of
+      every row and sizes the good ones
 
 Still open:
 
-- [ ] Load a BOM from CSV/JSON — `process_batch()` accepts Python dicts only
 - [ ] Parametric sweep / sensitivity plots (mesh size vs. temperature, emissivity, etc.)
 - [ ] Integration with pre-processor APIs (HyperMesh, ANSA)
 - [ ] Composite / multi-material through-thickness conduction (single-material today)

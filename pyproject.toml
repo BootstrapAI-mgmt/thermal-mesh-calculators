@@ -45,8 +45,9 @@ classifiers = [
 # Intentionally empty and load-bearing. The calculators must run inside CAE
 # pre-processor embedded interpreters (HyperMesh, ANSA, …) which have limited
 # package availability, so the package is pure standard library. Verified by an
-# AST scan of every module: the only non-self top-level imports are ``math`` and
-# ``typing``, both standard library.
+# AST scan of every module (tests/test_result_schema.py runs it): the only
+# non-self imports are ``csv``, ``io``, ``json``, ``math``, ``os``, ``re`` and
+# ``typing``, all standard library.
 # Do not add numpy/scipy — see CLAUDE.md "Design Decisions" #1.
 dependencies = []
 

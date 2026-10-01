@@ -15,7 +15,7 @@ The target users are thermal simulation engineers doing underhood analysis (exha
 
 ```
 thermal_mesh_calculators/       # Python package (pure stdlib, no dependencies)
-    __init__.py                 # Exports all calculator classes + h_estimator (v0.5.0)
+    __init__.py                 # Exports the calculator classes, h_estimator, and the batch, schema and intake API
     constants.py                # Stefan-Boltzmann constant
     _guards.py                  # Input range guards shared by the calculators (internal)
     conduction.py               # BoundaryDrivenConductionCalculator
@@ -54,10 +54,10 @@ tests/
     test_input_schema.py        # 100 tests — the input schema held to process_part key by key and class by class, the census of keys read, refused inputs
     test_load_bom.py            # 28 tests — load_bom: CSV and JSON, every bad row reported, good rows sized
     test_names.py               # 55 tests — material and zone aliases, component class inference
-    test_from_props.py          # 112 tests — sizing from explicit properties (all 43 materials), fluid regions, service limits
+    test_from_props.py          # 111 tests — sizing from explicit properties (all 43 materials), fluid regions, service limits
     test_result_schema.py       # 28 tests — the result schema, the warning registry, the docs' key tables and examples, stdlib-only imports
     conftest.py                 # checks every result the suite produces against the result schema
-                                # 790 tests total
+                                # 789 tests total
 ```
 
 ### Design Decisions
@@ -168,8 +168,9 @@ Emissivity fallback logic: non-metals → 0.90, aluminium → 0.30, other metals
 - [x] Automatic batch warnings from parametric study thresholds (v0.3)
 - [x] Parametric regime crossover studies (analysis/ directory)
 - [x] 11 worked automotive examples with verified output
-- [x] 740 pytest unit tests with analytical verification and energy balance closure
+- [x] 739 pytest unit tests with analytical verification and energy balance closure
 - [x] Inputs checked (unreleased; CHANGELOG `[Unreleased]`): unknown part names raise `PartInputError` naming the allowed set, physical inputs are range-guarded, and defaulted or extrapolated inputs, shield non-convergence and transient conflicts come back as coded warnings
+- [x] Part intake and result contract (unreleased; CHANGELOG `[Unreleased]`): versioned input and result schemas with standard-library validators (`schema.py`), every key checked before sizing and unknown keys refused, `load_bom()` for CSV and JSON reporting every problem of every row, `process_part_from_props()`, a `fluid` class sized by its boundary layer, material and zone aliases, `infer_component_class()`, optional `t_service_max_K` and `source` fields on material records (no values filled in), and `docs/integration.md`
 - [x] Full mathematical derivation documentation (docs/math_derivations.md, Sections 1–14)
 - [x] Published to PyPI — `pip install thermal-mesh-calculators`. 0.6.1 (2026-09-16,
       `requires-python` narrowed to `>=3.9` for it) and 0.6.2 (2026-09-17) were
@@ -269,7 +270,7 @@ CI runs all four on every push and pull request (ruff and mypy at pinned version
 and also installs the package with `pip install .` and imports it from outside the
 checkout.
 
-790 tests across 19 test files (740 physics, input-validation and contract + 18 for the open/closed map checker + 32 for the release statements and the documented test counts).
+789 tests across 19 test files (739 physics, input-validation and contract + 18 for the open/closed map checker + 32 for the release statements and the documented test counts).
 Test strategy:
 - Hand-computed analytical solutions for known inputs
 - Edge cases (zero flux, zero emissivity, pure convection/radiation)
@@ -283,6 +284,8 @@ Test strategy:
 - Fail-loud gate (`tests/test_fail_loud.py`): one planted input per formerly silent path, each failing against 0.6.2
 - Input guards (`tests/test_input_guards.py`): one planted violation per guarded parameter
 - Documented test counts (`tests/test_release_statements.py`): every count stated in this file and in `.github/copilot-instructions.md` is checked against a collection of the suite, so adding a test means updating those counts
+- Input schema parity (`tests/test_input_schema.py`): for every key, class and planted value, `process_part()` raises with exactly the problems `validate_part_input()` reports, and a census checks the keys the sizing code reads against the keys the schema declares, class by class
+- Every result validated (`tests/conftest.py`): each result the suite produces passes through `validate_result()`, so a result that drifts from the result schema fails the test that made it
 
 ## Common Agent Tasks
 
@@ -297,8 +300,20 @@ Test strategy:
 ### "Add a new material"
 - Add entry to `MATERIALS` dict in `batch.py`
 - Keys: `k` (W/mK), `rho` (kg/m³), `cp` (J/kgK), `description` (str); the diffusivity alpha = k/(rho*cp) is computed where it is needed, not stored
+- The entry must validate against `schema.MATERIAL_RECORD_SCHEMA`; `t_service_max_K` (K) and `source` are optional, and a limit needs its source
 - Group in appropriate category comment block (steels, aluminium, plastics, etc.)
-- Run `python -m pytest tests/test_batch.py -v` to verify
+- Common spellings may go in `intake.MATERIAL_ALIASES`: only names the entry's own description uses, never a family name
+- Run `python -m pytest tests/test_batch.py tests/test_from_props.py tests/test_names.py -v` to verify, and update the test counts
+
+### "Add a part or project key"
+1. Declare it in `schema.PART_SCHEMA` or `schema.PROJECT_SCHEMA`: type, range, unit, the classes that read it (`read_by`), default, description
+2. Read it in `batch.py`; the census in `tests/test_input_schema.py` fails while the sizing code reads a key the schema does not declare for that class, or the schema declares one no class reads
+3. Add its row to the key table in `docs/integration.md`; a test holds the table to the schema
+4. A renamed or removed key follows the deprecation rules in `docs/integration.md`
+
+### "Add a warning code"
+- Add it to `schema.WARNING_CODES` with its severities: `validate_result()` refuses a code not listed there, and a test holds that table to the codes `batch.py` emits
+- Add its row to the table in `docs/quick_reference.md`; a test holds the table to the registry
 
 ### "Add a new surface treatment"
 - Add entry to `SURFACE_TREATMENTS` dict in `batch.py`

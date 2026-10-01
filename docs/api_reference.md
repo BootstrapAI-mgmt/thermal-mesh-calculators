@@ -15,7 +15,9 @@ A pure Python package for mesh sizing and thermal analysis of heat shields and c
 7. [zones](#zones)
 8. [h_estimator](#h_estimator)
 9. [batch](#batch)
-10. [Quick Start Examples](#quick-start-examples)
+10. [schema](#schema)
+11. [intake](#intake)
+12. [Quick Start Examples](#quick-start-examples)
 
 ---
 
@@ -1277,6 +1279,11 @@ Keys include: `steel_mild`, `steel_stainless_304`, `steel_stainless_409`, `alumi
 - `cp` (float): Specific heat (J/kg·K)
 - `description` (str): Human-readable name
 
+An entry may also give `t_service_max_K` (float, K: the highest temperature the
+material may see in service) and `source` (str: where its values come from); both
+are optional fields of the material-record schema (`MATERIAL_RECORD_SCHEMA`), and no
+built-in entry gives them yet.
+
 **Example:**
 ```python
 from thermal_mesh_calculators.batch import MATERIALS
@@ -1399,8 +1406,9 @@ print(f"Available treatments: {len(treatments)}")
 ### process_part()
 
 Runs every applicable calculator for one part and returns the governing (smallest)
-element size. The module docstring of `thermal_mesh_calculators.batch` lists every
-key a part or project may carry.
+element size. Every key a part or project may carry is declared in `PART_SCHEMA` and
+`PROJECT_SCHEMA` ([schema](#schema)), with its type, range, the classes that read it
+and its default; [`integration.md`](integration.md) tabulates them.
 
 **Signature:**
 ```python
@@ -1412,20 +1420,21 @@ def process_part(part: dict, project: dict) -> dict
 `part` dict, required keys:
 - `part_id` (str): Part identifier
 - `material` (str): A key of `MATERIALS`
-- `component_class` (str): `"exhaust"`, `"exhaust_adjacent"`, `"structural"`, `"shield"` or `"multilayer_shield"` (the keys of `CLASS_DEFAULTS`)
+- `component_class` (str): `"exhaust"`, `"exhaust_adjacent"`, `"structural"`, `"shield"`, `"multilayer_shield"` or `"fluid"` (the keys of `CLASS_DEFAULTS`). A fluid region gives `part_id`, the class and `convection_zone` (or both `velocity_ms` and `bl_regime`), and is sized by its boundary layer alone
 - `convection_zone` (str): A key of `CONVECTION_ZONES`; shields may give `convection_zone_in` and `convection_zone_out` instead
 - `thickness_mm` (float): Wall thickness (mm)
 - `t_surf_K` (float): Surface temperature (K); ignored for the shield classes, whose temperature is solved
 
 `part` dict, surface keys: `surface` (a key of `SURFACE_TREATMENTS`) or `epsilon` for the non-shield classes; `surface_in` / `eps_in` and `surface_out` / `eps_out` for shields; `surface_g1` / `eps_g1` and `surface_g2` / `eps_g2` for the gap faces of a two-layer shield. A surface given neither falls back to a material-class emissivity and is reported as a `SURFACE_DEFAULTED` warning.
 
-`part` dict, optional keys (among others): `h_override`, `h_in_override`, `h_out_override`, `char_length_mm` (default 100), `t_fluid_K` (this part's fluid temperature), `t_exh_K`, `h_gap`, `f12`, `shield_max_iter`.
+`part` dict, optional keys (among others): `h_override`, `h_in_override`, `h_out_override`, `char_length_mm` (default 100), `t_fluid_K` (this part's fluid temperature), `t_exh_K`, `h_gap`, `f12`, `shield_max_iter`, `schema_version` (1). A key no schema declares is refused, unless it starts with `x_`.
 
 `project` dict: `t_fluid_K` and `t_surr_K` (K); optionally `max_dt` (K per element), `dt`, `fo_max`, `tau_bc`, `safety_factor`, `transient_scheme`, `allowable_flux_error`, `t_exh_K`, `shield_max_iter`.
 
 **Returns:**
 - `dict` with keys:
-  - `part_id`, `material`, `component_class`: echoed back
+  - `schema_version` (int): the result schema version (`RESULT_SCHEMA_VERSION`, 1)
+  - `part_id`, `material`, `component_class`: echoed back (`material` is `None` for a fluid region)
   - `t_fluid_K` (float), `t_fluid_source` (str): the fluid temperature used for h and q″, and `"part"` or `"project"`
   - `h_used`, `eps_used`: the h (W/m²·K) and emissivity used; for shields, a dict per face
   - `h_estimation` (dict): The h estimate (`h`, `method`, `regime`, `details`); absent for the shield classes
@@ -1436,10 +1445,14 @@ def process_part(part: dict, project: dict) -> dict
   - `governing_dx_mm` (float): The most restrictive element size (mm)
   - `governing_constraint` (str): The constraint that produced it
   - `all_constraints` (list): Every candidate as `{"dx_mm": ..., "source": ...}`
-  - `warnings` (list): Coded warnings, each with `code`, `severity` and `message` (input warnings also carry `key`)
+  - `boundary_layer` (dict): The boundary-layer sizes, when that constraint ran
+  - `bom_row` (int): The part's, when it has one
+  - `warnings` (list): Coded warnings, each with `code`, `severity` and `message` (input warnings also carry `key`); the codes are `WARNING_CODES`
+
+`validate_result()` checks a result against `RESULT_SCHEMA`.
 
 **Raises:**
-- `PartInputError` (a `KeyError` and a `ValueError`): before anything is computed, for a missing or unknown material, component class or convection zone, or an unknown surface treatment; the message names the part, the key and the allowed set
+- `PartInputError` (a `KeyError` and a `ValueError`): before anything is computed, for every problem `validate_part_input()` and `validate_project_input()` find: a missing or unknown material, component class, convection zone or surface treatment (the message names the part, the key and the allowed set), a value of the wrong type or out of its range (worded as the calculators' guards word it), a required key missing, a key no schema declares, an unsupported `schema_version`. Its `problems` attribute lists them, each with `key`, `code` and `reason`; project keys are prefixed `project.`
 
 **Example:**
 ```python
@@ -1461,9 +1474,66 @@ print(f"{result['part_id']}: {result['governing_dx_mm']:.1f} mm ({result['govern
 # BRK-001: 24.5 mm (lateral_gradient)
 ```
 
+### process_part_from_props()
+
+Runs `process_part()` for a part whose material properties are given explicitly
+instead of named: for a caller that holds its own property data. The keyword
+arguments are the fields of a material record, so an entry of `MATERIALS` can be
+passed whole, and `process_part_from_props(part, project, **MATERIALS[m])`
+returns what `process_part(dict(part, material=m), project)` returns.
+
+**Signature:**
+```python
+def process_part_from_props(part: dict, project: dict, *, k: float, rho: float,
+                            cp: float, description: Optional[str] = None,
+                            t_service_max_K: Optional[float] = None,
+                            source: Optional[str] = None) -> dict
+```
+
+**Parameters:**
+- `part` (dict): As for `process_part()`, except that `material` is optional and is
+  a label of the caller's own: never looked up, echoed into the result
+- `project` (dict): As for `process_part()`
+- `k` (float): Thermal conductivity (W/m·K)
+- `rho` (float): Density (kg/m³)
+- `cp` (float): Specific heat (J/kg·K)
+- `description` (str, optional): What the material is
+- `t_service_max_K` (float, optional): The material's service temperature limit (K);
+  a part sized above it gets a `SERVICE_TEMP_EXCEEDED` warning
+- `source` (str, optional): Where the values come from
+
+**Returns:**
+- `dict`: As `process_part()`. A fluid region takes no material properties: they are
+  checked, and not used.
+
+**Raises:**
+- `PartInputError`: As `process_part()`, and for a property out of its range (keys
+  prefixed `properties.`)
+
+**Example:**
+```python
+from thermal_mesh_calculators.batch import process_part_from_props
+
+part = {
+    "part_id": "BRK-001",
+    "material": "house steel S-7",   # a label of your own
+    "component_class": "structural",
+    "convection_zone": "engine_beside",
+    "thickness_mm": 3.0,
+    "t_surf_K": 473.15,
+    "surface": "painted",
+}
+project = {"t_fluid_K": 353.15, "t_surr_K": 353.15}
+
+result = process_part_from_props(part, project, k=48.0, rho=7850.0, cp=470.0)
+print(f"{result['part_id']}: {result['governing_dx_mm']:.1f} mm ({result['governing_constraint']})")
+# BRK-001: 23.1 mm (lateral_gradient)
+```
+
 ### process_batch()
 
-Analyzes multiple parts.
+Analyzes multiple parts. A part that cannot be sized gets an error result instead of
+stopping the batch.
 
 **Signature:**
 ```python
@@ -1471,11 +1541,17 @@ def process_batch(parts: list, project: dict) -> list
 ```
 
 **Parameters:**
-- `parts` (list): List of part dicts (same format as process_part)
-- `project` (dict): Project parameters (same as process_part)
+- `parts` (list): Part dicts (as for `process_part()`), or the rows `load_bom()`
+  returns
+- `project` (dict): Project parameters (as for `process_part()`)
 
 **Returns:**
-- `list`: List of result dicts from process_part()
+- `list`: One result per part, in input order: `process_part()`'s result with
+  `error` set to `None`, or an error result (`ERROR_RESULT_SCHEMA`) with keys
+  `schema_version`, `part_id` (the part's, or `"UNKNOWN"`), `error` (the message),
+  `problems` (each with `key`, `code` and `reason`), `governing_dx_mm` and
+  `governing_constraint` set to `None`, and `bom_row` when the part has one. A row
+  `load_bom()` could not load gets an error result listing all of its problems.
 
 **Example:**
 ```python
@@ -1483,36 +1559,34 @@ from thermal_mesh_calculators.batch import process_batch
 
 parts = [
     {
-        'id': 'shield_1',
-        'material': 'stainless_316',
-        'component_class': 'structural',
-        'thickness_mm': 1.0,
-        'characteristic_length_mm': 100.0,
-        'zone': 'exhaust_pipe'
+        "part_id": "SH-001",
+        "material": "steel_stainless_409",
+        "component_class": "shield",
+        "convection_zone_in": "exhaust_beside",
+        "convection_zone_out": "engine_beside",
+        "thickness_mm": 0.8,
+        "surface_in": "aluminised",
+        "surface_out": "aluminised",
     },
     {
-        'id': 'shield_2',
-        'material': 'aluminum_6061',
-        'component_class': 'structural',
-        'thickness_mm': 2.0,
-        'characteristic_length_mm': 80.0,
-        'zone': 'underhood_metal'
-    }
+        "part_id": "BRK-002",
+        "material": "aluminium_6061",
+        "component_class": "structural",
+        "convection_zone": "engine_beside",
+        "thickness_mm": -2.0,          # reported in the result, not raised
+        "t_surf_K": 400.0,
+        "surface": "anodised",
+    },
 ]
+project = {"t_fluid_K": 343.15, "t_surr_K": 343.15, "t_exh_K": 873.15}
 
-project = {
-    't_exh_K': 873.15,
-    't_fluid_K': 343.15,
-    't_surr_K': 343.15,
-    'epsilon_in': 0.8,
-    'epsilon_out': 0.8,
-    'max_dt': 0.1
-}
-
-results = process_batch(parts, project)
-
-for result in results:
-    print(f"{result['part_id']}: {result['governing_dx_mm']:.2f} mm")
+for result in process_batch(parts, project):
+    if result["error"]:
+        print(f"{result['part_id']}: {result['error']}")
+    else:
+        print(f"{result['part_id']}: {result['governing_dx_mm']:.2f} mm")
+# SH-001: 24.42 mm
+# BRK-002: thickness_mm must be > 0 mm, got -2.0
 ```
 
 ### summary_table()
@@ -1538,6 +1612,171 @@ results = process_batch(parts, project)
 table = summary_table(results)
 print(table)
 ```
+
+---
+
+## schema
+
+The input and result contracts as data, each with a version and a validator that
+uses nothing but the standard library. [`integration.md`](integration.md) explains
+them; this section lists the names.
+
+**Versions:** `INPUT_SCHEMA_VERSION` and `RESULT_SCHEMA_VERSION` (both 1). A part or
+project may give `schema_version` (absent means 1); every result carries the result
+schema version it conforms to.
+
+**Schemas:**
+- `PART_SCHEMA`, `PROJECT_SCHEMA` (dict): Every key a part or project may carry, each
+  mapped to its `type`, `range`, `unit`, `nullable`, `vocabulary` or `values`, the
+  classes that read it (`read_by`, part keys), when it is `required`, its `default`
+  and a `description`
+- `MATERIAL_RECORD_SCHEMA` (dict): The fields of a material record: `k`, `rho`, `cp`
+  (required), `description`, `t_service_max_K`, `source` (optional)
+- `RESULT_SCHEMA`, `ERROR_RESULT_SCHEMA` (dict): The keys of a result and of
+  `process_batch()`'s error result, with the types each allows
+- `WARNING_CODES` (dict): Every warning code, with its `severities` and `meaning`
+- `PROBLEM_CODES` (dict): The codes of an input problem, with their meanings
+
+### validate_part_input()
+
+**Signature:**
+```python
+def validate_part_input(part, material_from_table: bool = True) -> list
+```
+
+**Parameters:**
+- `part` (dict): A part definition
+- `material_from_table` (bool): `True` (the default) for `process_part()`: `material`
+  must be a key of `MATERIALS`. `False` for `process_part_from_props()`: `material`
+  is an optional label of the caller's own
+
+**Returns:**
+- `list`: Every problem found, each a dict with `key`, `code` and `reason`; empty
+  when the part conforms. `process_part()` raises `PartInputError` with exactly these.
+
+### validate_project_input()
+
+**Signature:**
+```python
+def validate_project_input(project) -> list
+```
+
+**Returns:**
+- `list`: Every problem of the project dict (`key`, `code`, `reason`); empty when it
+  conforms
+
+### validate_material_record()
+
+**Signature:**
+```python
+def validate_material_record(record) -> list
+```
+
+**Returns:**
+- `list`: Every problem of the record (`key`, `code`, `reason`); empty when it
+  conforms. The optional fields may be absent.
+
+### validate_result()
+
+**Signature:**
+```python
+def validate_result(result) -> list
+```
+
+**Returns:**
+- `list`: Every problem of a result (`key`, `code`, `reason`): an undeclared or
+  missing key, a wrong type, a missing promised sub-key (for example
+  `biot["mesh_type"]`), an unregistered warning code or severity, a governing size
+  that is not the smallest candidate. A dict whose `error` is a non-empty string is
+  checked against `ERROR_RESULT_SCHEMA`.
+
+**Example:**
+```python
+from thermal_mesh_calculators import process_part, validate_result
+
+result = process_part(part, project)
+assert validate_result(result) == []
+```
+
+---
+
+## intake
+
+From a caller's own data to `process_batch()`: BOM files, names and classes.
+
+### load_bom()
+
+Reads a bill of materials into part dicts. Every row is checked against the part
+schema; a bad row is kept and carries `bom_errors`, every problem it has, instead of
+stopping the load.
+
+**Signature:**
+```python
+def load_bom(source, fmt: Optional[str] = None, resolve_names: bool = True) -> list
+```
+
+**Parameters:**
+- `source` (str, path or open file): A CSV file (one column per part key, one row per
+  part; an empty cell is a key not given) or a JSON file (an array of part objects, or
+  an object with a `parts` array and an optional `schema_version`), UTF-8
+- `fmt` (str, optional): `"csv"` or `"json"`; `None` reads it from the extension
+- `resolve_names` (bool): `True` (the default) reads the material and zone names
+  through `resolve_material()` and `resolve_zone()`, and normalises the class's
+  spelling; `False` takes every name as written
+
+**Returns:**
+- `list`: One part dict per data row, in file order, each with `bom_row` (its line in
+  a CSV file, the header being line 1; its position in a JSON array); a row with
+  problems also carries `bom_errors`. Rows of empty cells are skipped.
+
+**Raises:**
+- `ValueError`: For a file that is not a BOM at all (not UTF-8, not valid JSON, a JSON
+  value of the wrong shape, a CSV header naming a column twice, an unknown format)
+
+**Example:**
+```python
+from thermal_mesh_calculators import load_bom, process_batch
+
+parts = load_bom("parts.csv")
+for result in process_batch(parts, project):
+    if result["error"]:
+        print(f"row {result['bom_row']}: {result['error']}")
+```
+
+### resolve_material(), resolve_zone()
+
+**Signature:**
+```python
+def resolve_material(name: str) -> str
+def resolve_zone(name: str) -> str
+```
+
+Return the canonical key of `MATERIALS` or `CONVECTION_ZONES` a name refers to: the
+key itself, or a spelling `MATERIAL_ALIASES` or `ZONE_ALIASES` lists, compared after
+normalisation (case, punctuation, US spellings). Raise `PartInputError` for any other
+name, naming the allowed set; a family name such as `"aluminium"` also gets the
+entries it could mean.
+
+```python
+from thermal_mesh_calculators import resolve_material, resolve_zone
+
+resolve_material("PA66-GF30")     # 'plastic_pa66_gf30'
+resolve_zone("Beside engine")     # 'engine_beside'
+```
+
+### infer_component_class()
+
+**Signature:**
+```python
+def infer_component_class(part: dict) -> str
+```
+
+Returns the component class a part's keys imply: its own `component_class` if given;
+else `multilayer_shield` for any two-layer shield key, `shield` for any shield key,
+`exhaust` for the `exhaust_internal` zone, `exhaust_adjacent` for a zone beside the
+exhaust, and `structural` otherwise. `fluid` is never inferred. The rule, the keys
+that decide it and a worked example per class are in
+[`integration.md`](integration.md#how-a-parts-class-is-inferred).
 
 ---
 
@@ -1618,38 +1857,47 @@ from thermal_mesh_calculators.batch import process_batch, summary_table
 
 parts = [
     {
-        'id': 'outer_shield',
-        'material': 'stainless_316',
-        'component_class': 'structural',
+        'part_id': 'outer_shield',
+        'material': 'steel_stainless_304',
+        'component_class': 'shield',
+        'convection_zone_in': 'exhaust_beside',
+        'convection_zone_out': 'engine_beside',
         'thickness_mm': 1.0,
-        'characteristic_length_mm': 150.0,
-        'zone': 'exhaust_pipe'
+        'char_length_mm': 150.0,
+        'surface_in': 'stainless_weathered',
+        'surface_out': 'aluminised',
     },
     {
-        'id': 'inner_shield',
-        'material': 'stainless_304',
-        'component_class': 'structural',
+        'part_id': 'inner_shield',
+        'material': 'steel_stainless_304',
+        'component_class': 'multilayer_shield',
+        'convection_zone_in': 'exhaust_beside',
+        'convection_zone_out': 'shield_gap_confined',
         'thickness_mm': 0.8,
-        'characteristic_length_mm': 140.0,
-        'zone': 'exhaust_pipe'
+        'surface_in': 'stainless_weathered',
+        'surface_out': 'aluminised',
+        'surface_g1': 'aluminised',
+        'surface_g2': 'aluminised',
+        'h_gap': 12.0,
+        'f12': 0.9,
     },
     {
-        'id': 'bracket',
-        'material': 'aluminum_6061',
+        'part_id': 'bracket',
+        'material': 'aluminium_6061',
         'component_class': 'structural',
+        'convection_zone': 'engine_beside',
         'thickness_mm': 3.0,
-        'characteristic_length_mm': 50.0,
-        'zone': 'underhood_metal'
-    }
+        't_surf_K': 400.0,
+        'char_length_mm': 50.0,
+        'surface': 'anodised',
+    },
 ]
 
 project = {
     't_exh_K': 873.15,
     't_fluid_K': 343.15,
     't_surr_K': 343.15,
-    'epsilon_in': 0.8,
-    'epsilon_out': 0.8,
-    'max_dt': 0.1
+    'max_dt': None,          # the class defaults
 }
 
 results = process_batch(parts, project)
@@ -1659,6 +1907,9 @@ for result in results:
     print(f"\n{result['part_id']}:")
     print(f"  Mesh element: {result['governing_dx_mm']:.2f} mm")
     print(f"  Binding constraint: {result['governing_constraint']}")
+# outer_shield: 5.25 mm, radiation
+# inner_shield: 4.73 mm, radiation
+# bracket: 53.35 mm, lateral_gradient
 ```
 
 ### Example 5: Convection h Estimation from Velocity
@@ -1725,7 +1976,9 @@ The thermal-mesh-calculators package provides comprehensive thermal analysis and
 - Transient analysis: Fourier number limits, penetration depth, time scales
 - Convection modeling: Biot numbers, h estimation, zone databases
 - Radiation effects: View factors, flux sensitivity, emissivity
-- Batch processing: Multi-part analysis with unified mesh recommendations
+- Batch processing: Multi-part analysis with unified mesh recommendations, from part
+  dicts or a CSV or JSON bill of materials
+- Contracts: versioned input and result schemas with standard-library validators
 - Material and surface databases: 43 materials and 30 surface treatments
 
 All functions are pure Python with no external dependencies.

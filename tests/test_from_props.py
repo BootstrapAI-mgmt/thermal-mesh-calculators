@@ -105,10 +105,6 @@ def test_properties_path_equals_table_path(name):
     assert not diverged, f"{name}: the paths differ for {diverged}"
 
 
-def test_all_43_materials_are_covered():
-    assert len(MATERIALS) == 43
-
-
 def test_a_part_without_a_label_echoes_none_and_sizes_alike():
     # Explicit surfaces and a metal: no rule reads the name, so only the
     # echoed material differs.

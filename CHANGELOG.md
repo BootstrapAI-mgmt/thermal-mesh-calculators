@@ -15,9 +15,11 @@ starts at 0.6.2, and `v0.6.2` is its first tag.
 
 ## [Unreleased]
 
-Input validation: inputs the library used to accept without a word now raise
-a named error or come back with a coded warning. Entries marked **(behaviour
-change)** can alter a result, or raise where 0.6.2 returned one.
+Input validation and a part-intake and result contract: inputs the library
+used to accept without a word now raise a named error or come back with a coded
+warning, and the keys a part, a project and a result may carry are published as
+versioned schemas. Entries marked **(behaviour change)** can alter a result, or
+raise where 0.6.2 returned one.
 
 ### Added
 - `PartInputError`, exported from the package. `process_part()` raises it
@@ -80,6 +82,70 @@ change)** can alter a result, or raise where 0.6.2 returned one.
   back to its default: `t_exh_K` (neither part nor project gives it; 1073.15
   K), `h_gap` (15 W/m² K) or `f12` (1.0, parallel plates). A defaulted gap
   surface is reported as `SURFACE_DEFAULTED`.
+- `schema.py`: the input and result contracts as data, each versioned
+  (`INPUT_SCHEMA_VERSION` and `RESULT_SCHEMA_VERSION`, both 1).
+  `PART_SCHEMA` and `PROJECT_SCHEMA` give every key a part or project may
+  carry, with its type, range, unit, the component classes that read it, when
+  it is required and its default; `MATERIAL_RECORD_SCHEMA` the fields of a
+  material record; `RESULT_SCHEMA` and `ERROR_RESULT_SCHEMA` the results;
+  `WARNING_CODES` every warning code with its severities; `PROBLEM_CODES` the
+  codes of an input problem. `validate_part_input()`,
+  `validate_project_input()`, `validate_material_record()` and
+  `validate_result()` check a dict against them with the standard library
+  alone and return every problem (key, code, reason). All are exported from
+  the package.
+- `process_part()` runs the input checks before it computes anything, and
+  `PartInputError` carries every problem they find in its `problems`
+  attribute; a message with more than one problem lists each on a line of its
+  own (project keys are prefixed `project.`). A value's problem is worded as
+  the calculators' guards word it.
+- `schema_version` on every result, and on `process_batch()`'s error results,
+  which also carry `problems` (key, code, reason) and the part's `bom_row`. An
+  error a calculator raises on accepted inputs is a `CALCULATION_FAILED`
+  problem.
+- A part or project may give `schema_version` (absent means 1); another
+  version raises. Keys starting with `x_` are the caller's own: accepted
+  anywhere, carried through, never read.
+- `process_part_from_props()`: sizing from material properties given as
+  keyword arguments (`k`, `rho`, `cp`, and the optional `description`,
+  `t_service_max_K` and `source`) instead of a `MATERIALS` name, so a caller
+  that holds its own property data can size a part. An entry of `MATERIALS`
+  passed whole gives what `process_part()` gives for that material; the part's
+  `material` is then an optional label of the caller's own.
+- A `fluid` component class: a fluid region gives its flow (`convection_zone`,
+  or both `velocity_ms` and `bl_regime`) and is sized by the boundary-layer
+  constraint alone. No conduction, lateral, Biot, radiation, shield, transient
+  or curvature constraint runs, and it takes no material. Its regime is the
+  part's or the project's `bl_regime`, else the zone's (a forced zone is
+  `external_forced`, any other `mixed_unknown`).
+- `load_bom()` reads a CSV or JSON bill of materials into part dicts for
+  `process_batch()`. It checks every row against the part schema and reports
+  every problem of every row: a bad row is kept, with `bom_errors`, and
+  `process_batch()` returns an error result for it (with its row and problems)
+  beside the sized good rows. Every part carries `bom_row`. Repeated part ids
+  (`DUPLICATE_PART_ID`), rows wider than the header (`MALFORMED_ROW`) and JSON
+  elements that are not objects (`NOT_AN_OBJECT`) are row problems; a file
+  that is not a BOM at all raises `ValueError`.
+- `resolve_material()` and `resolve_zone()`, with the alias tables
+  `MATERIAL_ALIASES` and `ZONE_ALIASES`: common spellings ("Mild steel",
+  "PA66-GF30", "SS 316", "aluminum 6061", "beside engine") resolve to the
+  canonical key, after case, punctuation and US spelling are normalised. A
+  family name ("aluminium") is refused with the entries it could mean.
+  `load_bom()` resolves names on the way in; `process_part()` reads canonical
+  keys only.
+- `infer_component_class()`: the class a part's keys imply (two-layer shield
+  keys, then shield keys, then the exhaust zones, else structural), for data
+  that carries no class. `fluid` is never inferred.
+- Material records may give `t_service_max_K` and `source`, both optional. A
+  part sized above a limit its record gives gets a `SERVICE_TEMP_EXCEEDED`
+  warning (the surface temperature, or a shield's solved temperature). No
+  built-in record gives a limit or a source yet: the values and their sources'
+  reuse terms are left to the maintainer.
+- `docs/integration.md`, a guide for code that builds part dicts: the key
+  tables, the component classes and their inference rule with a worked example
+  per class, the properties path, fluid regions, names, BOM files, results,
+  material records, and how keys are added, renamed and removed across
+  releases. Its tables and examples are tested.
 
 ### Changed
 - **(behaviour change)** An unknown `component_class` raises. 0.6.2 sized it
@@ -123,6 +189,27 @@ change)** can alter a result, or raise where 0.6.2 returned one.
 - **(behaviour change)** Out-of-range inputs raise instead of returning a
   number. With k = −45 and ε = 1.7, `max_mesh_size()` returned −1.920 mm.
   `lateral_gradient_limit()` with k ≤ 0 now raises where it returned `inf`.
+- **(behaviour change)** A key no schema declares raises `PartInputError`,
+  on a part or a project. 0.6.2 ignored it, so a misspelt `h_overide` sized
+  the part with the zone's h.
+- **(behaviour change)** Every key a part's class reads is checked for its type
+  and range before anything is computed, and so is every key a project gives.
+  Raise where 0.6.2 returned a result: a `part_id` that is not a non-empty
+  string (0.6.2 sized it, and `summary_table()` then raised); `thickness_mm`
+  ≤ 0; `radius_mm` ≤ 0 and `bl_fraction` ≤ 0 (0.6.2 returned a zero or
+  negative governing size from either) or above 1; `bl_y_plus` ≤ 0,
+  `bl_growth_ratio` ≤ 1, `bl_ar_max_prism` < 1 and a negative `velocity_ms`;
+  a `bl_regime` other than `"external_forced"` and `"mixed_unknown"` (0.6.2
+  ran any other value as `"external_forced"`); `max_dt` or
+  `allowable_flux_error` of 0 (0.6.2 read it as "use the class default");
+  `char_length_mm` ≤ 0 (0.6.2 fell back to the zone's static h without a
+  word); and a project value of the wrong type that the part's class does not
+  read, such as a structural part's project `t_exh_K` of `"x"`. A key a class
+  does not read is not checked (a shield's `t_surf_K` of 0 is still
+  accepted); the zone and surface names are checked whatever the class, as
+  before.
+- `CLASS_DEFAULTS` has a `fluid` entry, whose `max_dt` and
+  `allowable_flux_error` are `None`.
 
 ### Fixed
 - Parameters that default to `None` are annotated `Optional[...]`, so a type
@@ -144,6 +231,11 @@ change)** can alter a result, or raise where 0.6.2 returned one.
 - A shield given both `h_in_override` and `h_out_override` no longer needs a
   convection zone: 0.6.2 looked the zones up before reading the overrides and
   raised `KeyError` when they were absent.
+- `docs/quick_reference.md` listed five of the twelve warning codes, three of
+  them with another severity than the code gives; it now lists every code with
+  its severities, held to `WARNING_CODES` by a test. The `process_batch()`
+  examples in `docs/api_reference.md` used keys the library never read
+  (`id`, `zone`, `characteristic_length_mm`) and names it does not know.
 
 ## [0.6.2.post1] — 2026-09-26
 
