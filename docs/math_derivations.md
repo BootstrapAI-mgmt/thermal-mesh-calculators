@@ -1763,9 +1763,83 @@ Transition, Re = 5000:          laminar 3.66, Gnielinski 16.722 → 16.722 used
 
 ---
 
+## 16. A Solver Check of the Wall Sizing Rule
+
+`analysis/mesh_convergence_1d_wall.py` meshes a wall at the cell count the
+sizing rule (§1.6, through `size_for_fea()`) gives, solves it with CalculiX,
+and compares the solver's temperature profile with the exact one.
+
+### 16.1 Why the Conductivity Has to Vary
+
+With a constant k and no source, the steady profile through a wall is a
+straight line, and linear finite elements reproduce a straight line exactly,
+at the nodes and between them, whatever the mesh (§1.6 says the same of the
+sizing relation: one cell captures the derivation's own profile).  A check
+built on that problem passes every mesh and can never fail.  A conductivity
+that varies with temperature bends the profile.  The check takes carbon
+steel's fall from about 50 W/m·K at 20 °C to about 30 W/m·K at 800 °C, as a
+straight line through those two points, across a 10 mm wall held at 800 °C
+and 100 °C.
+
+### 16.2 The Exact Answer
+
+The Kirchhoff transform
+
+```
+θ(T) = ∫ k(T') dT'   (from T_1 to T)
+```
+
+turns −d/dx(k dT/dx) = 0 into d²θ/dx² = 0, so θ is linear in x between
+θ(T_hot) and θ(T_cold), the flux is
+
+```
+q'' = (θ(T_hot) − θ(T_cold)) / L
+```
+
+and T(x) is θ's inverse — with k linear in T, the root of a quadratic.  For
+the default wall q'' = 2.728 × 10⁶ W/m², and the mid-wall temperature is
+683.37 K, 39.8 K below the straight line between the faces.
+
+### 16.3 The Rule's Cells and the Comparison
+
+The rule needs the flux the boundary delivers, here q'' exactly, and the
+conductivity, here its smallest value across the wall (30 W/m·K, the most
+demanding).  With ΔT_max = 20 K it gives ⌈L·q''/(k·ΔT_max)⌉ = ⌈45.47⌉ = 46
+cells.  The check solves 46, 92 and 184 cells (a row of 8-node bricks, the
+end faces held at the two temperatures), interpolates the solver's nodal
+temperatures linearly through the thickness, and takes the largest difference
+from the exact profile across the wall, divided by T_hot − T_cold.  Every
+level must lie within 2 % and the error must fall with refinement; a planted
+coarse mesh of one cell must miss the band.
+
+The solve is a Newton iteration (k depends on T).  CalculiX's default
+criteria stop it with a temperature correction of about 1 K still to come,
+an error that no refinement removes, so the deck asks for corrections of
+10⁻¹⁰ of the field.
+
+### 16.4 Measured
+
+```
+mesh                  cells   cell (mm)   profile error (% of 700 K)
+the rule's mesh          46     0.2174     0.0058
+refined ×2               92     0.1087     0.0015
+refined ×4              184     0.0543     0.00039
+planted coarse mesh       1    10          5.76    → fails the 2 % band
+observed order of convergence: 1.96, 1.93
+```
+
+The order is the 2 a linear interpolant of a smooth curve should show.  The
+band is loose for this wall: two cells come in at 1.99 %.  What the rule buys
+is the margin, 0.006 % at its own count.  Left at CalculiX's default Newton
+criteria the error stalls near 0.026 % at every level (orders −0.01 and 0.00)
+and the check fails, so it catches a solve that does not converge as well as
+a mesh that is too coarse.
+
+---
+
 ## Summary of Key Design Equations (Updated)
 
-All constraints from Sections 1–15:
+All constraints from Sections 1–15 (Section 16 checks the conduction rule against a solver):
 
 **Conduction (boundary-driven):**
 ```

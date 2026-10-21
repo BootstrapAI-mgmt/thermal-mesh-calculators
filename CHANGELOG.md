@@ -19,8 +19,8 @@ Input validation and a part-intake and result contract: inputs the library
 used to accept without a word now raise a named error or come back with a coded
 warning, and the keys a part, a project and a result may carry are published as
 versioned schemas. Beside them, heat-transfer correlations for flow inside
-ducts and a sizing hook for an external mesher, neither of which changes an
-existing result. Entries marked **(behaviour change)** can alter a result, or
+ducts, a sizing hook for an external mesher and a solver check of the wall
+sizing rule, none of which changes an existing result. Entries marked **(behaviour change)** can alter a result, or
 raise where 0.6.2 returned one.
 
 ### Added
@@ -189,6 +189,19 @@ raise where 0.6.2 returned one.
   `validate_fea_sizing()` in `schema.py`. A request the schema refuses raises
   `PartInputError` with every problem; `docs/integration.md` section 10
   documents the call, and its two key tables are held to the schemas.
+- `analysis/mesh_convergence_1d_wall.py`: a check of the wall sizing rule
+  against CalculiX. A 10 mm steel-like wall, its faces held at 800 °C and
+  100 °C, with a conductivity falling linearly from 50 to 30 W/m K (with a
+  constant one the profile is a straight line that any mesh reproduces, and
+  no mesh could fail), is meshed at the rule's cell count (46, through
+  `size_for_fea()`) and at two refinements, solved by `ccx`, and compared with
+  the exact (Kirchhoff-transform) profile: 0.0058 %, 0.0015 % and 0.00039 % of
+  the 700 K drop, order 1.96 and 1.93, against a 2 % band; a planted coarse
+  mesh of one cell misses it at 5.76 % and the check fails it by name. Derived
+  in `docs/math_derivations.md` §16. `tests/test_mesh_convergence_1d_wall.py`
+  tests the exact answer, the deck and the comparison everywhere, and runs
+  the solver where `ccx` is on PATH (its three solver tests skip by name
+  elsewhere, as in CI).
 
 ### Changed
 - **(behaviour change)** An unknown `component_class` raises. 0.6.2 sized it

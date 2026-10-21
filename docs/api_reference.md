@@ -2148,11 +2148,13 @@ The thermal-mesh-calculators package provides comprehensive thermal analysis and
 
 - Steady-state analysis: Shield temperatures, flux distributions
 - Transient analysis: Fourier number limits, penetration depth, time scales
-- Convection modeling: Biot numbers, h estimation, zone databases
+- Convection modeling: Biot numbers, h estimation, zone databases, and h inside
+  ducts (fully developed laminar, Hausen's thermal entry, Gnielinski, Dittus–Boelter)
 - Radiation effects: View factors, flux sensitivity, emissivity
 - Batch processing: Multi-part analysis with unified mesh recommendations, from part
   dicts or a CSV or JSON bill of materials
 - Contracts: versioned input and result schemas with standard-library validators
+- A sizing hook for an external mesher: `size_for_fea()`, dict in and dict out
 - Material and surface databases: 43 materials and 30 surface treatments
 
 All functions are pure Python with no external dependencies.

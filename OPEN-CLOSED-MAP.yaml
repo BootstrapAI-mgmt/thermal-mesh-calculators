@@ -62,7 +62,7 @@ entries:
     bucket: open
     basis: "OPEN: the mesh-sizing library — parametric studies demonstrating the library (R3)"
     extract_to: null
-    notes: "Regime-crossover and scenario studies that *call* the calculators."
+    notes: "Regime-crossover and scenario studies that *call* the calculators, and a solver check of the wall sizing rule."
   - path: docs/api_reference.md
     bucket: open
     basis: "OPEN: the mesh-sizing library (R3)"

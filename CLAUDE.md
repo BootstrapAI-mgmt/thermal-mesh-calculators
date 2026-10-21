@@ -38,6 +38,7 @@ analysis/
     regime_crossover_study.py   # Parametric study: conduction vs convection dominance thresholds
     offroad_regime_study.py     # Off-road 10 mph study: laminar/turbulent/mixed regime mapping
     exhaust_underbody_scenario.py # Off-road underbody exhaust: pipe and cargo shields, cargo bed
+    mesh_convergence_1d_wall.py # Solver check of the wall sizing rule: CalculiX (ccx) on a 1-D wall with k(T), three refinements, a planted coarse mesh
 tests/
     test_conduction.py          # 14 tests (incl. lateral gradient)
     test_convection.py          # 12 tests (incl. cell Biot 20x)
@@ -62,8 +63,9 @@ tests/
     test_examples_regression.py # 3 tests — the worked examples and estimate_h() held to the outputs captured before the duct path
     golden_outputs.py           # those captured outputs (data, not tests)
     test_fea_sizing.py          # 37 tests — the hook equals size_wall over 768 plates, its result schema, its request checks
+    test_mesh_convergence_1d_wall.py # 14 tests — the exact k(T) wall, the deck, the comparison; 3 run ccx and skip without it
     conftest.py                 # checks every result the suite produces against the result schema
-                                # 864 tests total
+                                # 878 tests total
 ```
 
 ### Design Decisions
@@ -175,10 +177,13 @@ Emissivity fallback logic: non-metals → 0.90, aluminium → 0.30, other metals
 - [x] Automatic batch warnings from parametric study thresholds (v0.3)
 - [x] Parametric regime crossover studies (analysis/ directory)
 - [x] 11 worked automotive examples with verified output
-- [x] 814 pytest unit tests with analytical verification and energy balance closure
+- [x] 828 pytest unit tests with analytical verification and energy balance closure
 - [x] Inputs checked (unreleased; CHANGELOG `[Unreleased]`): unknown part names raise `PartInputError` naming the allowed set, physical inputs are range-guarded, and defaulted or extrapolated inputs, shield non-convergence and transient conflicts come back as coded warnings
 - [x] Part intake and result contract (unreleased; CHANGELOG `[Unreleased]`): versioned input and result schemas with standard-library validators (`schema.py`), every key checked before sizing and unknown keys refused, `load_bom()` for CSV and JSON reporting every problem of every row, `process_part_from_props()`, a `fluid` class sized by its boundary layer, material and zone aliases, `infer_component_class()`, optional `t_service_max_K` and `source` fields on material records (no values filled in), and `docs/integration.md`
-- [x] Full mathematical derivation documentation (docs/math_derivations.md, Sections 1–14)
+- [x] Internal-flow h for ducts (unreleased; CHANGELOG `[Unreleased]`): `internal_flow.py`, reached from `estimate_h()` only through its `duct` argument; a hand-computed benchmark per correlation, and the examples' and `estimate_h()`'s earlier outputs held by `tests/test_examples_regression.py`
+- [x] A sizing hook for an external mesher (unreleased; CHANGELOG `[Unreleased]`): `fea_sizing.size_for_fea()`, dict in and dict out, equal to `size_wall()` over 768 plates, with its own request and result schemas
+- [x] A solver check of the wall sizing rule (unreleased; CHANGELOG `[Unreleased]`): `analysis/mesh_convergence_1d_wall.py` against CalculiX, failing a planted coarse mesh by name
+- [x] Full mathematical derivation documentation (docs/math_derivations.md, Sections 1–16)
 - [x] Published to PyPI — `pip install thermal-mesh-calculators`. 0.6.1 (2026-09-16,
       `requires-python` narrowed to `>=3.9` for it) and 0.6.2 (2026-09-17) were
       withdrawn from the index; it serves 0.6.2.post1 (2026-09-26), the 0.6.2 code
@@ -277,7 +282,7 @@ CI runs all four on every push and pull request (ruff and mypy at pinned version
 and also installs the package with `pip install .` and imports it from outside the
 checkout.
 
-864 tests across 22 test files (814 physics, input-validation and contract + 18 for the open/closed map checker + 32 for the release statements and the documented test counts).
+878 tests across 23 test files (828 physics, input-validation and contract + 18 for the open/closed map checker + 32 for the release statements and the documented test counts). Without PyYAML one test skips, and without CalculiX's `ccx` on PATH (as in CI) three more do.
 Test strategy:
 - Hand-computed analytical solutions for known inputs
 - Edge cases (zero flux, zero emissivity, pure convection/radiation)
@@ -293,6 +298,8 @@ Test strategy:
 - Documented test counts (`tests/test_release_statements.py`): every count stated in this file and in `.github/copilot-instructions.md` is checked against a collection of the suite, so adding a test means updating those counts
 - Input schema parity (`tests/test_input_schema.py`): for every key, class and planted value, `process_part()` raises with exactly the problems `validate_part_input()` reports, and a census checks the keys the sizing code reads against the keys the schema declares, class by class
 - Every result validated (`tests/conftest.py`): each result the suite produces passes through `validate_result()`, so a result that drifts from the result schema fails the test that made it
+- Nothing else moves (`tests/test_examples_regression.py`): the worked examples' printed output and `estimate_h()` over a grid, held to `tests/golden_outputs.py`, captured before the duct path existed
+- Solver check (`tests/test_mesh_convergence_1d_wall.py`): CalculiX solves the rule's mesh of a 1-D wall and two refinements; the tests that need `ccx` skip by name where it is not installed
 
 ## Common Agent Tasks
 
