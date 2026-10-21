@@ -17,8 +17,9 @@ A pure Python package for mesh sizing and thermal analysis of heat shields and c
 9. [internal_flow](#internal_flow)
 10. [batch](#batch)
 11. [schema](#schema)
-12. [intake](#intake)
-13. [Quick Start Examples](#quick-start-examples)
+12. [fea_sizing](#fea_sizing)
+13. [intake](#intake)
+14. [Quick Start Examples](#quick-start-examples)
 
 ---
 
@@ -1722,9 +1723,10 @@ The input and result contracts as data, each with a version and a validator that
 uses nothing but the standard library. [`integration.md`](integration.md) explains
 them; this section lists the names.
 
-**Versions:** `INPUT_SCHEMA_VERSION` and `RESULT_SCHEMA_VERSION` (both 1). A part or
-project may give `schema_version` (absent means 1); every result carries the result
-schema version it conforms to.
+**Versions:** `INPUT_SCHEMA_VERSION`, `RESULT_SCHEMA_VERSION` and
+`FEA_SIZING_SCHEMA_VERSION` (all 1). A part or project, or a sizing-hook request, may
+give `schema_version` (absent means 1); every result carries the result schema
+version it conforms to, and every sizing-hook result its own.
 
 **Schemas:**
 - `PART_SCHEMA`, `PROJECT_SCHEMA` (dict): Every key a part or project may carry, each
@@ -1737,6 +1739,12 @@ schema version it conforms to.
   `process_batch()`'s error result, with the types each allows
 - `WARNING_CODES` (dict): Every warning code, with its `severities` and `meaning`
 - `PROBLEM_CODES` (dict): The codes of an input problem, with their meanings
+- `FEA_SIZING_REQUEST_SCHEMA` (dict): The keys of a `size_for_fea()` request, in the
+  part schema's form (`type`, `range`, `unit`, `required`, `default`, `description`)
+- `FEA_SIZING_RESULT_SCHEMA` (dict): The keys of a `size_for_fea()` result, in the
+  result schema's form (`types`, `required`, `values`, `keys`)
+- `FEA_BINDING_CONSTRAINTS`, `WALL_REGIMES` (tuple): The values of a sizing-hook
+  result's `binding_constraint` and `regime`
 
 ### validate_part_input()
 
@@ -1797,6 +1805,70 @@ from thermal_mesh_calculators import process_part, validate_result
 
 result = process_part(part, project)
 assert validate_result(result) == []
+```
+
+### validate_fea_sizing_request(), validate_fea_sizing()
+
+**Signatures:**
+```python
+def validate_fea_sizing_request(request) -> list
+def validate_fea_sizing(result) -> list
+```
+
+**Returns:**
+- `list`: Every problem (`key`, `code`, `reason`); empty when the dict conforms.
+  The request check refuses an undeclared key (unless it starts with `x_`), a value
+  of the wrong type or out of its range, a missing key, an unknown material, and a
+  material given both by name and by properties (`INCONSISTENT`); `size_for_fea()`
+  raises `PartInputError` with exactly these. The result check refuses an
+  undeclared or missing key, a wrong type, a number that is not finite, a warning
+  that is not a string, and a `char_size_mm` × `n_cells` that is not the wall
+  thickness (`INCONSISTENT`)
+
+---
+
+## fea_sizing
+
+A sizing hook for an external mesher: a wall's through-thickness cell size, dict in
+and dict out, both plain JSON. The call, the key tables and the binding constraints
+are in [`integration.md`](integration.md#10-a-sizing-hook-for-an-external-mesher).
+
+### size_for_fea()
+
+**Signature:**
+```python
+def size_for_fea(request: dict) -> dict
+```
+
+**Parameters:**
+- `request` (dict): The keys of `FEA_SIZING_REQUEST_SCHEMA`: `material` (a key of
+  `MATERIALS` or an alias), or `k`, `rho` and `cp` instead; `thickness_mm`, `h`,
+  `t_surf_K`, `t_fluid_K`, `t_surr_K`, `epsilon`, `max_dt`; optionally `max_cells`
+  (default 100) and `schema_version`. Keys starting with `x_` are never read
+
+**Returns:**
+- `dict`: `BoundaryDrivenConductionCalculator.size_wall()` on that wall, as plain
+  JSON: `schema_version`, `char_size_mm` (size_wall's `dx_used_mm`), `n_cells`,
+  `thickness_mm`, `biot`, `binding_constraint` (`"conduction"`, `"wall_thickness"`,
+  `"max_cells"` or `"near_equilibrium"`), `rationale`, and size_wall's `regime`,
+  `dx_raw_mm`, `dx_exceeds_part`, `dt_wall_K`, `h_effective`, `q_conv`, `q_rad`,
+  `q_total`, `rad_fraction`, `recommendation` and `warnings`, plus `material`
+  (`name`, `k`, `rho`, `cp`, `alpha_m2_s`). A quantity size_wall reports as
+  infinite is `None`
+
+**Raises:**
+- `PartInputError`: For a request the schema refuses, with every problem at once
+  (`problems`: `key`, `code`, `reason`)
+
+**Example:**
+```python
+from thermal_mesh_calculators import size_for_fea
+
+sized = size_for_fea({"material": "steel_mild", "thickness_mm": 3.0, "h": 25.0,
+                      "t_surf_K": 473.15, "t_fluid_K": 353.15, "t_surr_K": 323.15,
+                      "epsilon": 0.9, "max_dt": 10.0})
+print(sized["n_cells"], sized["char_size_mm"], sized["binding_constraint"])
+# 1 3.0 wall_thickness
 ```
 
 ---

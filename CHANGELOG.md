@@ -19,8 +19,9 @@ Input validation and a part-intake and result contract: inputs the library
 used to accept without a word now raise a named error or come back with a coded
 warning, and the keys a part, a project and a result may carry are published as
 versioned schemas. Beside them, heat-transfer correlations for flow inside
-ducts, which no existing result uses. Entries marked **(behaviour change)** can
-alter a result, or raise where 0.6.2 returned one.
+ducts and a sizing hook for an external mesher, neither of which changes an
+existing result. Entries marked **(behaviour change)** can alter a result, or
+raise where 0.6.2 returned one.
 
 ### Added
 - `PartInputError`, exported from the package. `process_part()` raises it
@@ -171,6 +172,23 @@ alter a result, or raise where 0.6.2 returned one.
   `tests/test_examples_regression.py` holds the worked examples' printed
   output, the batch example's and a grid of `estimate_h()` results to what
   they were before.
+- `fea_sizing.size_for_fea()`: a sizing hook for an external mesher. It takes a
+  dict — a wall's material (a `MATERIALS` key or an alias, or `k`, `rho` and
+  `cp`), `thickness_mm` and the boundary conditions `h`, `t_surf_K`,
+  `t_fluid_K`, `t_surr_K`, `epsilon` and `max_dt` — and returns a plain-JSON
+  dict: the through-thickness cell size `char_size_mm`, the cell count
+  `n_cells`, the Biot number, the `binding_constraint` (`conduction`,
+  `wall_thickness`, `max_cells` or `near_equilibrium`), a one-line `rationale`,
+  every other quantity `BoundaryDrivenConductionCalculator.size_wall()`
+  reports, and `schema_version`. It is `size_wall()` on that wall:
+  `tests/test_fea_sizing.py` holds every shared quantity equal to 1e-12
+  relative over a grid of 768 plates. A quantity `size_wall()` reports as
+  infinite is `None`, since JSON has none.
+- `FEA_SIZING_REQUEST_SCHEMA`, `FEA_SIZING_RESULT_SCHEMA`,
+  `FEA_SIZING_SCHEMA_VERSION` (1), `validate_fea_sizing_request()` and
+  `validate_fea_sizing()` in `schema.py`. A request the schema refuses raises
+  `PartInputError` with every problem; `docs/integration.md` section 10
+  documents the call, and its two key tables are held to the schemas.
 
 ### Changed
 - **(behaviour change)** An unknown `component_class` raises. 0.6.2 sized it

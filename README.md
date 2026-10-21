@@ -54,7 +54,10 @@ hydraulic diameter; reached from `estimate_h()` only through its `duct` argument
 `batch.py` (BOM → mesh sizes, with 43 materials and 30 surface treatments inline) ·
 `schema.py` (versioned input and result schemas, and validators for them) ·
 `intake.py` (BOM files in CSV or JSON, material and zone aliases, component class
-inference).
+inference) · `fea_sizing.py` (`size_for_fea()`: a sizing hook for an external
+mesher — a wall's through-thickness cell size, cell count, Biot number and binding
+constraint from `size_wall()`, dict in and dict out, both plain JSON; see
+[`docs/integration.md`](docs/integration.md#10-a-sizing-hook-for-an-external-mesher)).
 
 Full signatures are in [`docs/api_reference.md`](docs/api_reference.md); the
 derivations behind every constraint are in

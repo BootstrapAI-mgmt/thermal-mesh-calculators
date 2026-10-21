@@ -22,11 +22,11 @@ Pure Python thermal mesh sizing calculators for automotive CAE. Derives maximum 
 ## Testing
 
 ```bash
-python -m pytest tests/ -q              # 827 passed (without PyYAML, one of them is skipped)
+python -m pytest tests/ -q              # 864 passed (without PyYAML, one of them is skipped)
 python -m examples.automotive_examples  # 11 worked scenarios
 ```
 
-827 tests across 21 files: **777 physics, input validation and the input and
+864 tests across 22 files: **814 physics, input validation and the input and
 result contract** (hand-computed analytical solutions, energy-balance closure on
 the Newton-Raphson shield solvers, scaling checks, planted invalid inputs, the
 schemas held to the engine) plus **18** for the open/closed map checker

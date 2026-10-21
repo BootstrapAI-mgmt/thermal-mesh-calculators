@@ -16,9 +16,13 @@ a validator that needs nothing but the standard library:
     RESULT_SCHEMA,               — the dicts process_part() and
     ERROR_RESULT_SCHEMA            process_batch() return, and the
     WARNING_CODES                  warning codes a result may carry
+    FEA_SIZING_REQUEST_SCHEMA,   — the dict an external mesher gives
+    FEA_SIZING_RESULT_SCHEMA       fea_sizing.size_for_fea(), and the dict
+                                   it gets back
 
     validate_part_input(), validate_project_input(),
-    validate_material_record(), validate_result()
+    validate_material_record(), validate_result(),
+    validate_fea_sizing_request(), validate_fea_sizing()
                                  — each returns a list of problems, empty
                                    when the dict conforms
 
@@ -36,10 +40,11 @@ starts with "x_": those keys are the caller's own and are never read.
 
 Versions
 --------
-INPUT_SCHEMA_VERSION and RESULT_SCHEMA_VERSION are integers.  A part or
-project dict may name the input schema it was written for in a
-``schema_version`` key (absent means 1); every result carries the result
-schema version it conforms to.  docs/integration.md says how keys are
+INPUT_SCHEMA_VERSION, RESULT_SCHEMA_VERSION and FEA_SIZING_SCHEMA_VERSION
+are integers.  A part or project dict, or a sizing-hook request, may name
+the input schema it was written for in a ``schema_version`` key (absent
+means 1); every result carries the result schema version it conforms to,
+and every sizing-hook result the version of FEA_SIZING_RESULT_SCHEMA.  docs/integration.md says how keys are
 added, renamed and removed across releases.
 
 Problems
@@ -63,6 +68,7 @@ from thermal_mesh_calculators._guards import (
 
 INPUT_SCHEMA_VERSION = 1
 RESULT_SCHEMA_VERSION = 1
+FEA_SIZING_SCHEMA_VERSION = 1
 
 # ---------------------------------------------------------------------------
 #  Component classes
@@ -451,6 +457,47 @@ MATERIAL_RECORD_SCHEMA: Dict[str, Dict[str, Any]] = {
     },
 }
 
+# The request fea_sizing.size_for_fea() reads: a wall's material (a name, or
+# k, rho and cp), its thickness and the boundary conditions size_wall()
+# needs.  The temperature and size keys are the part schema's names.
+FEA_SIZING_REQUEST_SCHEMA: Dict[str, Dict[str, Any]] = {
+    "schema_version": {
+        "type": "integer", "what": "input schema version", "default": "1",
+        "description": "The input schema the request was written for.",
+    },
+    "material": {
+        "type": "string", "non_empty": True, "what": "material",
+        "description": "A key of MATERIALS or a spelling MATERIAL_ALIASES "
+                       "lists; give it, or k, rho and cp, not both.",
+    },
+    "k": _num("thermal conductivity", _POS, "W/m K",
+              description="Instead of material: conductivity."),
+    "rho": _num("density", _POS, "kg/m^3",
+                description="Instead of material: density."),
+    "cp": _num("specific heat", _POS, "J/kg K",
+               description="Instead of material: specific heat."),
+    "thickness_mm": _num("wall thickness", _POS, "mm", required=True,
+                         description="Wall thickness."),
+    "h": _num("convection coefficient", _NON_NEG, "W/m^2 K", required=True,
+              description="Convective coefficient at the surface."),
+    "t_surf_K": _num("surface temperature", _POS, "K", required=True,
+                     description="Surface temperature."),
+    "t_fluid_K": _num("fluid temperature", _POS, "K", required=True,
+                      description="Free-stream or bulk fluid temperature."),
+    "t_surr_K": _num("radiation sink temperature", _POS, "K", required=True,
+                     description="Radiation sink temperature."),
+    "epsilon": _num("emissivity", _FRACTION, required=True,
+                    description="Surface emissivity."),
+    "max_dt": _num("temperature step", _POS, "K", required=True,
+                   description="Accuracy target: temperature change per "
+                               "cell."),
+    "max_cells": {
+        "type": "integer", "range": (">=", 1), "what": "cell cap",
+        "default": "100",
+        "description": "Cap on the through-thickness cell count.",
+    },
+}
+
 
 # ---------------------------------------------------------------------------
 #  Warning codes
@@ -617,6 +664,40 @@ ERROR_RESULT_SCHEMA: Dict[str, Dict[str, Any]] = {
     "governing_dx_mm": {"types": ("none",), "required": True},
     "governing_constraint": {"types": ("none",), "required": True},
     "bom_row": {"types": ("integer",), "required": False},
+}
+
+# What set the sizing hook's cell count: the max_dt relation, the wall itself
+# (the whole wall is within max_dt), the cell cap, or the pole guard.
+FEA_BINDING_CONSTRAINTS = ("conduction", "wall_thickness", "max_cells",
+                           "near_equilibrium")
+WALL_REGIMES = ("thermally_thin", "resolve", "steep_gradient",
+                "near_equilibrium")
+
+# The dict fea_sizing.size_for_fea() returns.  Plain JSON: a quantity
+# size_wall() reports as infinite is None here.
+FEA_SIZING_RESULT_SCHEMA: Dict[str, Dict[str, Any]] = {
+    "schema_version": {"types": ("integer",), "required": True},
+    "char_size_mm": {"types": ("number",), "required": True},
+    "n_cells": {"types": ("integer",), "required": True},
+    "thickness_mm": {"types": ("number",), "required": True},
+    "biot": {"types": ("number", "none"), "required": True},
+    "binding_constraint": {"types": ("string",), "required": True,
+                           "values": FEA_BINDING_CONSTRAINTS},
+    "rationale": {"types": ("string",), "required": True},
+    "regime": {"types": ("string",), "required": True,
+               "values": WALL_REGIMES},
+    "dx_raw_mm": {"types": ("number", "none"), "required": True},
+    "dx_exceeds_part": {"types": ("bool",), "required": True},
+    "dt_wall_K": {"types": ("number",), "required": True},
+    "h_effective": {"types": ("number", "none"), "required": True},
+    "q_conv": {"types": ("number",), "required": True},
+    "q_rad": {"types": ("number",), "required": True},
+    "q_total": {"types": ("number",), "required": True},
+    "rad_fraction": {"types": ("number",), "required": True},
+    "recommendation": {"types": ("string",), "required": True},
+    "warnings": {"types": ("list",), "required": True},
+    "material": {"types": ("dict",), "required": True,
+                 "keys": ("name", "k", "rho", "cp", "alpha_m2_s")},
 }
 
 
@@ -1127,9 +1208,136 @@ def validate_result(result) -> List[Dict[str, Any]]:
     return problems
 
 
+# ---------------------------------------------------------------------------
+#  The sizing hook's request and result
+# ---------------------------------------------------------------------------
+
+_PROPERTY_KEYS = ("k", "rho", "cp")
+
+
+def validate_fea_sizing_request(request) -> List[Dict[str, Any]]:
+    """
+    Check a request for fea_sizing.size_for_fea() against
+    FEA_SIZING_REQUEST_SCHEMA.
+
+    Every key is checked for its type and range, a key the schema does not
+    declare is refused (unless it starts with "x_"), and the material comes
+    either as a name (a MATERIALS key or an alias) or as all three of k,
+    rho and cp, never both.
+
+    Returns
+    -------
+    list of dict — every problem found (key, code, reason); empty when
+    the request conforms.
+    """
+    where = " (fea sizing request)"
+    problems = _flat_problems(request, FEA_SIZING_REQUEST_SCHEMA, where,
+                              "fea sizing request")
+    if (not isinstance(request, dict)
+            or any(p["code"] == "UNSUPPORTED_VERSION" for p in problems)):
+        return problems
+    given = [k for k in _PROPERTY_KEYS if k in request]
+    if "material" in request:
+        if given:
+            problems.append(_problem(
+                "material", "INCONSISTENT",
+                f"Give either 'material' or 'k', 'rho' and 'cp', not both: "
+                f"the request gives 'material' and "
+                f"{', '.join(repr(k) for k in given)}{where}"))
+        elif isinstance(request["material"], str) and request["material"]:
+            # Imported here: intake imports batch, which imports this module.
+            from thermal_mesh_calculators.intake import resolve_material
+            try:
+                resolve_material(request["material"])
+            except KeyError as exc:      # PartInputError
+                problems.append(_problem("material", "UNKNOWN_NAME",
+                                         str(exc) + where))
+    elif not given:
+        problems.append(_problem(
+            "material", "MISSING_KEY",
+            f"Missing material: the request gives neither 'material' nor "
+            f"'k', 'rho' and 'cp'{where}"))
+    else:
+        for key in _PROPERTY_KEYS:
+            if key not in request:
+                problems.append(_problem(
+                    key, "MISSING_KEY",
+                    f"Missing {FEA_SIZING_REQUEST_SCHEMA[key]['what']}: the "
+                    f"request gives {', '.join(repr(k) for k in given)} but "
+                    f"no {key!r} (give all three of 'k', 'rho' and 'cp', or "
+                    f"'material'){where}"))
+    return problems
+
+
+def _non_finite_problems(container: dict, path: str) -> list:
+    problems = []
+    for key, value in container.items():
+        if (isinstance(value, float) and not isinstance(value, bool)
+                and not math.isfinite(value)):
+            name = f"{path}{key}"
+            problems.append(_problem(name, "OUT_OF_RANGE",
+                                     f"{name} must be finite (the result is "
+                                     f"plain JSON), got {value!r}"))
+    return problems
+
+
+def validate_fea_sizing(result) -> List[Dict[str, Any]]:
+    """
+    Check a result of fea_sizing.size_for_fea() against
+    FEA_SIZING_RESULT_SCHEMA.
+
+    Every key must be declared and of its type, every number finite (the
+    result is plain JSON: an infinite quantity is None), every warning a
+    string, n_cells at least 1, and char_size_mm times n_cells the wall
+    thickness.
+
+    Returns
+    -------
+    list of dict — every problem found (key, code, reason); empty when
+    the result conforms.
+    """
+    if not isinstance(result, dict):
+        return [_problem(None, "NOT_AN_OBJECT",
+                         f"A sizing-hook result must be a dict, got "
+                         f"{type(result).__name__}")]
+    problems = _keys_problems(result, FEA_SIZING_RESULT_SCHEMA)
+    version = result.get("schema_version")
+    if _type_name(version) == "integer" and version != FEA_SIZING_SCHEMA_VERSION:
+        problems.append(_problem(
+            "schema_version", "UNSUPPORTED_VERSION",
+            f"sizing-hook result schema_version {version} is not "
+            f"{FEA_SIZING_SCHEMA_VERSION}"))
+    problems += _non_finite_problems(result, "")
+    if isinstance(result.get("material"), dict):
+        problems += _non_finite_problems(result["material"], "material.")
+    warnings = result.get("warnings")
+    if isinstance(warnings, list):
+        for i, item in enumerate(warnings):
+            if not isinstance(item, str):
+                problems.append(_problem(f"warnings[{i}]", "WRONG_TYPE",
+                                         f"warnings[{i}] must be a string, "
+                                         f"got {item!r}"))
+    n: Any = result.get("n_cells")
+    size: Any = result.get("char_size_mm")
+    wall: Any = result.get("thickness_mm")
+    if _type_name(n) == "integer" and n < 1:
+        problems.append(_problem("n_cells", "OUT_OF_RANGE",
+                                 f"n_cells must be >= 1, got {n!r}"))
+    elif (_type_name(n) == "integer" and _type_ok(size, ("number",))
+            and _type_ok(wall, ("number",)) and math.isfinite(size)
+            and math.isfinite(wall)
+            and not math.isclose(size * n, wall, rel_tol=1e-9)):
+        problems.append(_problem(
+            "char_size_mm", "INCONSISTENT",
+            f"char_size_mm x n_cells is {size * n!r} mm, not the wall "
+            f"thickness {wall!r} mm"))
+    return problems
+
+
 __all__ = [
     "INPUT_SCHEMA_VERSION",
     "RESULT_SCHEMA_VERSION",
+    "FEA_SIZING_SCHEMA_VERSION",
     "COMPONENT_CLASSES",
     "SOLID_CLASSES",
     "NON_SHIELD_SOLID_CLASSES",
@@ -1150,4 +1358,10 @@ __all__ = [
     "validate_project_input",
     "validate_material_record",
     "validate_result",
+    "FEA_SIZING_REQUEST_SCHEMA",
+    "FEA_SIZING_RESULT_SCHEMA",
+    "FEA_BINDING_CONSTRAINTS",
+    "WALL_REGIMES",
+    "validate_fea_sizing_request",
+    "validate_fea_sizing",
 ]

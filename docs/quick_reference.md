@@ -30,6 +30,24 @@ result = BoundaryDrivenConductionCalculator.max_mesh_size(
 print(f"Max element size: {result['max_dx_mm']:.2f} mm")
 ```
 
+### 1b. "My mesher needs a wall's through-thickness cell size"
+
+Call `size_for_fea()` with a dict and use the dict it returns (both plain JSON):
+
+```python
+from thermal_mesh_calculators import size_for_fea
+
+sized = size_for_fea({"material": "PA66-GF30", "thickness_mm": 6.0, "h": 150.0,
+                      "t_surf_K": 473.15, "t_fluid_K": 353.15, "t_surr_K": 353.15,
+                      "epsilon": 0.0, "max_dt": 10.0})
+# sized["n_cells"] == 44, sized["binding_constraint"] == "conduction",
+# sized["char_size_mm"] ≈ 0.1364 — the same as size_wall() on that wall
+```
+
+`binding_constraint` says what set the count: `conduction` (the per-cell step),
+`wall_thickness` (one cell spans a thermally thin wall), `max_cells` (capped) or
+`near_equilibrium`. See `docs/integration.md` section 10 for every key.
+
 ### 2. "I need mesh size for a structural part (non-exhaust)"
 
 Same calculator, but T_surf is estimated (±30 K typical).

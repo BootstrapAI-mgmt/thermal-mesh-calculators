@@ -28,8 +28,9 @@ thermal_mesh_calculators/       # Python package (pure stdlib, no dependencies)
     internal_flow.py            # Convective HTC inside ducts (laminar, Hausen entry, Gnielinski, Dittus-Boelter, hydraulic diameter)
     boundary_layer.py           # BoundaryLayerCalculator (aero BL mesh: y+, inflation, surface dx)
     batch.py                    # BOM → mesh sizes (43 materials, 30 surface treatments, solver advisory); process_part_from_props, fluid regions
-    schema.py                   # Versioned input and result schemas, warning codes, stdlib validators
+    schema.py                   # Versioned input and result schemas (and the sizing hook's), warning codes, stdlib validators
     intake.py                   # load_bom (CSV, JSON), material and zone aliases, component class inference
+    fea_sizing.py               # size_for_fea: a sizing hook for an external mesher (size_wall, dict in and dict out, plain JSON)
 examples/
     automotive_examples.py      # 11 worked scenarios with realistic inputs
     batch_example.py            # Batch processing demonstration
@@ -60,8 +61,9 @@ tests/
     test_internal_flow.py       # 34 tests — duct h: the hand-computed benchmark per correlation, the transition band, advisories, estimate_h(duct=...)
     test_examples_regression.py # 3 tests — the worked examples and estimate_h() held to the outputs captured before the duct path
     golden_outputs.py           # those captured outputs (data, not tests)
+    test_fea_sizing.py          # 37 tests — the hook equals size_wall over 768 plates, its result schema, its request checks
     conftest.py                 # checks every result the suite produces against the result schema
-                                # 827 tests total
+                                # 864 tests total
 ```
 
 ### Design Decisions
@@ -173,7 +175,7 @@ Emissivity fallback logic: non-metals → 0.90, aluminium → 0.30, other metals
 - [x] Automatic batch warnings from parametric study thresholds (v0.3)
 - [x] Parametric regime crossover studies (analysis/ directory)
 - [x] 11 worked automotive examples with verified output
-- [x] 777 pytest unit tests with analytical verification and energy balance closure
+- [x] 814 pytest unit tests with analytical verification and energy balance closure
 - [x] Inputs checked (unreleased; CHANGELOG `[Unreleased]`): unknown part names raise `PartInputError` naming the allowed set, physical inputs are range-guarded, and defaulted or extrapolated inputs, shield non-convergence and transient conflicts come back as coded warnings
 - [x] Part intake and result contract (unreleased; CHANGELOG `[Unreleased]`): versioned input and result schemas with standard-library validators (`schema.py`), every key checked before sizing and unknown keys refused, `load_bom()` for CSV and JSON reporting every problem of every row, `process_part_from_props()`, a `fluid` class sized by its boundary layer, material and zone aliases, `infer_component_class()`, optional `t_service_max_K` and `source` fields on material records (no values filled in), and `docs/integration.md`
 - [x] Full mathematical derivation documentation (docs/math_derivations.md, Sections 1–14)
@@ -275,7 +277,7 @@ CI runs all four on every push and pull request (ruff and mypy at pinned version
 and also installs the package with `pip install .` and imports it from outside the
 checkout.
 
-827 tests across 21 test files (777 physics, input-validation and contract + 18 for the open/closed map checker + 32 for the release statements and the documented test counts).
+864 tests across 22 test files (814 physics, input-validation and contract + 18 for the open/closed map checker + 32 for the release statements and the documented test counts).
 Test strategy:
 - Hand-computed analytical solutions for known inputs
 - Edge cases (zero flux, zero emissivity, pure convection/radiation)

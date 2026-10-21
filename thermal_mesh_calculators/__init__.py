@@ -20,6 +20,8 @@ Modules:
     schema      - Versioned input and result schemas, with validators
     intake      - BOM files (CSV, JSON), material and zone aliases,
                   component class inference
+    fea_sizing  - A sizing hook for an external mesher: a wall's
+                  through-thickness cell size, dict in and dict out
 """
 
 from thermal_mesh_calculators.conduction import BoundaryDrivenConductionCalculator
@@ -54,6 +56,11 @@ from thermal_mesh_calculators.schema import (
     validate_project_input,
     validate_material_record,
     validate_result,
+    FEA_SIZING_SCHEMA_VERSION,
+    FEA_SIZING_REQUEST_SCHEMA,
+    FEA_SIZING_RESULT_SCHEMA,
+    validate_fea_sizing_request,
+    validate_fea_sizing,
 )
 from thermal_mesh_calculators.intake import (
     load_bom,
@@ -93,5 +100,6 @@ from thermal_mesh_calculators.internal_flow import (
     NU_LAMINAR_CONSTANT_TEMPERATURE,
     NU_LAMINAR_CONSTANT_HEAT_FLUX,
 )
+from thermal_mesh_calculators.fea_sizing import size_for_fea
 
 __version__ = "0.6.2"
