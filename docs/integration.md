@@ -4,11 +4,13 @@ For code that builds part dicts from data of its own (a CAD or CFD
 preprocessing step, a PLM export, a spreadsheet) and reads the results back.
 It covers what a part and a project may say, how a part's component class is
 decided, how to size a part from your own material properties or a fluid
-region, how names and BOM files are read, what a result promises, and how the
-contract changes across releases.
+region, how names and BOM files are read, what a result promises, how the
+contract changes across releases, and how an external mesher asks for a wall's
+through-thickness cell size.
 
 The test suite checks this page against the package: the two key tables below
-against `PART_SCHEMA` and `PROJECT_SCHEMA` (`tests/test_result_schema.py`), and
+against `PART_SCHEMA` and `PROJECT_SCHEMA` (`tests/test_result_schema.py`), the
+sizing hook's two tables against its schemas (`tests/test_fea_sizing.py`), and
 every example as a doctest. The functions are in
 [`api_reference.md`](api_reference.md); the schemas are data in
 `thermal_mesh_calculators/schema.py`.
@@ -511,3 +513,123 @@ with the same `schema_version`. A
 reader that checks `result["schema_version"]` against the version it was
 written for, and refuses another, cannot misread a result whose contract
 changed.
+
+The sizing hook of section 10 follows the same rules: its request is an input
+dict under `INPUT_SCHEMA_VERSION`, and its result schema is versioned on its own
+(`FEA_SIZING_SCHEMA_VERSION`).
+
+## 10. A sizing hook for an external mesher
+
+A tool that meshes a wall itself and only needs to know how finely to divide
+its thickness calls `size_for_fea(request)` with a dict and gets a dict back.
+Both are plain JSON, so the request can come from a file or a socket and the
+answer go straight back; nothing is read or written, nothing printed, and the
+caller needs nothing else of the package. The answer is
+`BoundaryDrivenConductionCalculator.size_wall()` — the rule `process_part()`
+applies through the thickness — on that wall, so the two never disagree
+(`tests/test_fea_sizing.py` holds them equal over a grid of plates).
+
+```pycon
+>>> import json
+>>> from thermal_mesh_calculators import size_for_fea, validate_fea_sizing
+>>> request = {"material": "steel_mild", "thickness_mm": 3.0, "h": 25.0,
+...            "t_surf_K": 473.15, "t_fluid_K": 353.15, "t_surr_K": 323.15,
+...            "epsilon": 0.9, "max_dt": 10.0}
+>>> sized = size_for_fea(request)
+>>> sized["n_cells"], sized["char_size_mm"], sized["binding_constraint"]
+(1, 3.0, 'wall_thickness')
+>>> sized["regime"], f"{sized['biot']:.5f}"
+('thermally_thin', '0.00232')
+>>> validate_fea_sizing(sized)
+[]
+>>> json.loads(json.dumps(sized, allow_nan=False)) == sized
+True
+
+```
+
+A wall the rule has to divide:
+
+```pycon
+>>> plastic = dict(request, material="PA66-GF30", thickness_mm=6.0, h=150.0,
+...                epsilon=0.0)
+>>> r = size_for_fea(plastic)
+>>> r["material"]["name"], r["n_cells"], f"{r['char_size_mm']:.4f}", r["binding_constraint"]
+('plastic_pa66_gf30', 44, '0.1364', 'conduction')
+>>> print(r["rationale"])
+44 cells of 0.1364 mm through the 6 mm wall keep the drop across each cell within max_dt = 10 K (Bi = 3.6, steep_gradient).
+
+```
+
+The request names the material, or gives its properties instead (all three of
+`k`, `rho` and `cp`, as `process_part_from_props()` takes them; never both),
+and the boundary conditions the rule needs. The temperature and size keys are
+the part schema's names. Keys starting with `x_` are the caller's own and are
+never read.
+
+<!-- fea-request-keys:begin -->
+| Key | Type and range | Required | Default | Meaning |
+|---|---|---|---|---|
+| `schema_version` | integer |  | 1 | the input schema the request was written for |
+| `material` | non-empty string: a key of `MATERIALS` or an alias | `material`, or `k`, `rho` and `cp` |  | the wall's material |
+| `k` | number > 0 W/m K | with `rho` and `cp`, instead of `material` |  | thermal conductivity |
+| `rho` | number > 0 kg/m^3 | with `k` and `cp`, instead of `material` |  | density |
+| `cp` | number > 0 J/kg K | with `k` and `rho`, instead of `material` |  | specific heat |
+| `thickness_mm` | number > 0 mm | yes |  | wall thickness |
+| `h` | number >= 0 W/m^2 K | yes |  | convective coefficient at the surface |
+| `t_surf_K` | number > 0 K | yes |  | surface temperature |
+| `t_fluid_K` | number > 0 K | yes |  | free-stream or bulk fluid temperature |
+| `t_surr_K` | number > 0 K | yes |  | radiation sink temperature |
+| `epsilon` | number in [0, 1] | yes |  | surface emissivity |
+| `max_dt` | number > 0 K | yes |  | accuracy target: temperature change per cell |
+| `max_cells` | integer >= 1 |  | 100 | cap on the cell count |
+<!-- fea-request-keys:end -->
+
+The result carries `schema_version` and conforms to `FEA_SIZING_RESULT_SCHEMA`,
+which `validate_fea_sizing()` checks: every key declared and of its type, every
+number finite, `char_size_mm` × `n_cells` the wall thickness.
+
+<!-- fea-result-keys:begin -->
+| Key | Type | Meaning |
+|---|---|---|
+| `schema_version` | integer | `FEA_SIZING_SCHEMA_VERSION` (1) |
+| `char_size_mm` | number | the through-thickness cell size: thickness / `n_cells` |
+| `n_cells` | integer | the cell count through the thickness |
+| `thickness_mm` | number | the wall thickness given |
+| `biot` | number or null | the wall's Biot number (null when the surface is at the fluid temperature) |
+| `binding_constraint` | string | what set `n_cells` (below) |
+| `rationale` | string | one line saying why |
+| `regime` | string | `thermally_thin`, `resolve`, `steep_gradient` or `near_equilibrium` |
+| `dx_raw_mm` | number or null | the unclamped relation k·ΔT_max/q″ (null near equilibrium) |
+| `dx_exceeds_part` | bool | the raw size is larger than the wall |
+| `dt_wall_K` | number | the implied drop through the wall |
+| `h_effective` | number or null | q″ / (T_s − T_f), radiation included |
+| `q_conv` | number | the convective surface flux (W/m^2) |
+| `q_rad` | number | the radiative surface flux (W/m^2) |
+| `q_total` | number | the magnitude of their sum (W/m^2) |
+| `rad_fraction` | number | the share of the flux that is radiation |
+| `recommendation` | string | the modelling decision in words |
+| `warnings` | list of strings | what the rule warns about this wall |
+| `material` | object | `name` (null for given properties), `k`, `rho`, `cp` and the diffusivity `alpha_m2_s` |
+<!-- fea-result-keys:end -->
+
+`binding_constraint` is one of:
+
+- `conduction` — the per-cell temperature step sets the count: the wall needs
+  ⌈thickness / (k·ΔT_max/q″)⌉ cells;
+- `wall_thickness` — the drop across the whole wall is already within
+  `max_dt`, so one cell spans it (a thermally thin wall, usually a shell);
+- `max_cells` — the count the step asks for exceeds `max_cells`, and is capped;
+- `near_equilibrium` — convection and radiation nearly cancel, the steady
+  balance cannot size the wall, and one cell is returned with that advice.
+
+A request the schema refuses raises `PartInputError` before anything is
+computed, with every problem at once (each with `key`, `code` and `reason`):
+
+```pycon
+>>> try:
+...     size_for_fea(dict(request, thickness_mm=0.0, colour="red"))
+... except PartInputError as exc:
+...     [(p["key"], p["code"]) for p in exc.problems]
+[('colour', 'UNKNOWN_KEY'), ('thickness_mm', 'OUT_OF_RANGE')]
+
+```

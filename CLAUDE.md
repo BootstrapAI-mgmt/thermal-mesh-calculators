@@ -25,10 +25,12 @@ thermal_mesh_calculators/       # Python package (pure stdlib, no dependencies)
     transient.py                # TransientMeshCalculator (penetration depth, Fourier, drive-cycle)
     zones.py                    # Convection zone lookup with velocity/orientation/t_air metadata
     h_estimator.py              # Convective HTC from correlations (forced, natural, mixed, Richardson)
+    internal_flow.py            # Convective HTC inside ducts (laminar, Hausen entry, Gnielinski, Dittus-Boelter, hydraulic diameter)
     boundary_layer.py           # BoundaryLayerCalculator (aero BL mesh: y+, inflation, surface dx)
     batch.py                    # BOM → mesh sizes (43 materials, 30 surface treatments, solver advisory); process_part_from_props, fluid regions
-    schema.py                   # Versioned input and result schemas, warning codes, stdlib validators
+    schema.py                   # Versioned input and result schemas (and the sizing hook's), warning codes, stdlib validators
     intake.py                   # load_bom (CSV, JSON), material and zone aliases, component class inference
+    fea_sizing.py               # size_for_fea: a sizing hook for an external mesher (size_wall, dict in and dict out, plain JSON)
 examples/
     automotive_examples.py      # 11 worked scenarios with realistic inputs
     batch_example.py            # Batch processing demonstration
@@ -36,6 +38,7 @@ analysis/
     regime_crossover_study.py   # Parametric study: conduction vs convection dominance thresholds
     offroad_regime_study.py     # Off-road 10 mph study: laminar/turbulent/mixed regime mapping
     exhaust_underbody_scenario.py # Off-road underbody exhaust: pipe and cargo shields, cargo bed
+    mesh_convergence_1d_wall.py # Solver check of the wall sizing rule: CalculiX (ccx) on a 1-D wall with k(T), three refinements, a planted coarse mesh
 tests/
     test_conduction.py          # 14 tests (incl. lateral gradient)
     test_convection.py          # 12 tests (incl. cell Biot 20x)
@@ -56,8 +59,13 @@ tests/
     test_names.py               # 55 tests — material and zone aliases, component class inference
     test_from_props.py          # 111 tests — sizing from explicit properties (all 43 materials), fluid regions, service limits
     test_result_schema.py       # 28 tests — the result schema, the warning registry, the docs' key tables and examples, stdlib-only imports
+    test_internal_flow.py       # 34 tests — duct h: the hand-computed benchmark per correlation, the transition band, advisories, estimate_h(duct=...)
+    test_examples_regression.py # 3 tests — the worked examples and estimate_h() held to the outputs captured before the duct path
+    golden_outputs.py           # those captured outputs (data, not tests)
+    test_fea_sizing.py          # 37 tests — the hook equals size_wall over 768 plates, its result schema, its request checks
+    test_mesh_convergence_1d_wall.py # 14 tests — the exact k(T) wall, the deck, the comparison; 3 run ccx and skip without it
     conftest.py                 # checks every result the suite produces against the result schema
-                                # 790 tests total
+                                # 878 tests total
 ```
 
 ### Design Decisions
@@ -118,6 +126,7 @@ The `h_estimator` module computes h from first principles rather than static loo
 - **Mixed convection (assisting)**: Asymptotic blending h_mixed = (h_forced³ + h_natural³)^(1/3)
 - **Mixed convection (opposing, v0.4)**: h_mixed = max(|h_f³ − h_n³|^(1/3), k_air/L) — for horizontal_down with forced flow
 - **External h cap**: 100 W/m²K absolute (H_EXTERNAL_MAX), 60 typical at 10 mph (H_EXTERNAL_TYPICAL); internal flows uncapped
+- **Internal flow in ducts (unreleased)**: `internal_flow.py` — Re on the hydraulic diameter 4A/P; laminar Nu 3.66 / 4.36 (Hausen's thermal entry with a length), Gnielinski with the Petukhov f (default) or Dittus–Boelter above Re 10 000, and in 2300 < Re < 10 000 both values reported, the higher used, with an advisory; reached from `estimate_h()` only through its `duct` argument
 
 ### Solver Advisory System (v0.3)
 
@@ -168,10 +177,13 @@ Emissivity fallback logic: non-metals → 0.90, aluminium → 0.30, other metals
 - [x] Automatic batch warnings from parametric study thresholds (v0.3)
 - [x] Parametric regime crossover studies (analysis/ directory)
 - [x] 11 worked automotive examples with verified output
-- [x] 740 pytest unit tests with analytical verification and energy balance closure
+- [x] 828 pytest unit tests with analytical verification and energy balance closure
 - [x] Inputs checked (unreleased; CHANGELOG `[Unreleased]`): unknown part names raise `PartInputError` naming the allowed set, physical inputs are range-guarded, and defaulted or extrapolated inputs, shield non-convergence and transient conflicts come back as coded warnings
 - [x] Part intake and result contract (unreleased; CHANGELOG `[Unreleased]`): versioned input and result schemas with standard-library validators (`schema.py`), every key checked before sizing and unknown keys refused, `load_bom()` for CSV and JSON reporting every problem of every row, `process_part_from_props()`, a `fluid` class sized by its boundary layer, material and zone aliases, `infer_component_class()`, optional `t_service_max_K` and `source` fields on material records (no values filled in), and `docs/integration.md`
-- [x] Full mathematical derivation documentation (docs/math_derivations.md, Sections 1–14)
+- [x] Internal-flow h for ducts (unreleased; CHANGELOG `[Unreleased]`): `internal_flow.py`, reached from `estimate_h()` only through its `duct` argument; a hand-computed benchmark per correlation, and the examples' and `estimate_h()`'s earlier outputs held by `tests/test_examples_regression.py`
+- [x] A sizing hook for an external mesher (unreleased; CHANGELOG `[Unreleased]`): `fea_sizing.size_for_fea()`, dict in and dict out, equal to `size_wall()` over 768 plates, with its own request and result schemas
+- [x] A solver check of the wall sizing rule (unreleased; CHANGELOG `[Unreleased]`): `analysis/mesh_convergence_1d_wall.py` against CalculiX, failing a planted coarse mesh by name
+- [x] Full mathematical derivation documentation (docs/math_derivations.md, Sections 1–16)
 - [x] Published to PyPI — `pip install thermal-mesh-calculators`. 0.6.1 (2026-09-16,
       `requires-python` narrowed to `>=3.9` for it) and 0.6.2 (2026-09-17) were
       withdrawn from the index; it serves 0.6.2.post1 (2026-09-26), the 0.6.2 code
@@ -270,7 +282,7 @@ CI runs all four on every push and pull request (ruff and mypy at pinned version
 and also installs the package with `pip install .` and imports it from outside the
 checkout.
 
-790 tests across 19 test files (740 physics, input-validation and contract + 18 for the open/closed map checker + 32 for the release statements and the documented test counts).
+878 tests across 23 test files (828 physics, input-validation and contract + 18 for the open/closed map checker + 32 for the release statements and the documented test counts). Without PyYAML one test skips, and without CalculiX's `ccx` on PATH (as in CI) three more do.
 Test strategy:
 - Hand-computed analytical solutions for known inputs
 - Edge cases (zero flux, zero emissivity, pure convection/radiation)
@@ -286,6 +298,8 @@ Test strategy:
 - Documented test counts (`tests/test_release_statements.py`): every count stated in this file and in `.github/copilot-instructions.md` is checked against a collection of the suite, so adding a test means updating those counts
 - Input schema parity (`tests/test_input_schema.py`): for every key, class and planted value, `process_part()` raises with exactly the problems `validate_part_input()` reports, and a census checks the keys the sizing code reads against the keys the schema declares, class by class
 - Every result validated (`tests/conftest.py`): each result the suite produces passes through `validate_result()`, so a result that drifts from the result schema fails the test that made it
+- Nothing else moves (`tests/test_examples_regression.py`): the worked examples' printed output and `estimate_h()` over a grid, held to `tests/golden_outputs.py`, captured before the duct path existed
+- Solver check (`tests/test_mesh_convergence_1d_wall.py`): CalculiX solves the rule's mesh of a 1-D wall and two refinements; the tests that need `ccx` skip by name where it is not installed
 
 ## Common Agent Tasks
 

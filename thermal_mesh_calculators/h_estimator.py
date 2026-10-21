@@ -165,6 +165,7 @@ def solver_advisory(
         severity            : str   — "info", "caution", "warning"
         natural_regime      : str   — "laminar", "turbulent", or "negligible"
         forced_regime       : str   — "laminar", "turbulent", or "n/a"
+                                      ("transitional" for a duct)
         Ra                  : float — Rayleigh number (if natural conv present)
         Re                  : float — Reynolds number (if forced conv present)
     """
@@ -224,6 +225,17 @@ def solver_advisory(
                 f"forced convection correlations use time-averaged "
                 f"Nusselt numbers."
             )
+
+    # --- Transitional internal flow (estimate_h with a duct) ---
+    if frc_regime == "transitional" and regime == "forced" and ss_ok:
+        severity = "caution"
+        reason = (
+            f"Transitional internal flow (Re={Re:.0f}, between 2300 and "
+            f"10000): the flow may be laminar, intermittent or turbulent, "
+            f"so h is uncertain between the laminar and turbulent "
+            f"correlations. A steady-state solve is still appropriate; "
+            f"bracket h, or check the flow regime in the solver."
+        )
 
     # --- Check transitional / marginal cases ---
     if regime == "mixed":
@@ -503,6 +515,7 @@ def estimate_h(
     char_length: float,
     orientation: str = "vertical",
     cap: float = H_EXTERNAL_MAX,
+    duct: Optional[dict] = None,
 ) -> dict:
     """
     Estimate h by computing both forced and natural convection, then
@@ -512,14 +525,35 @@ def estimate_h(
         h_mixed = (h_forced^3 + h_natural^3)^(1/3)
     which is standard for assisting mixed convection.
 
+    With ``duct``, the surface is the wall of a duct instead, and h comes
+    from the internal-flow correlations (internal_flow.internal_flow_h()).
+    Without it nothing about the estimate changes.
+
     Parameters
     ----------
-    velocity : float      — freestream velocity (m/s), 0 for dead zones
+    velocity : float      — freestream velocity (m/s), 0 for dead zones;
+                            with a duct, the mean velocity in the duct
     t_surf : float        — surface temperature (K)
-    t_fluid : float       — ambient temperature (K)
-    char_length : float   — characteristic length (m)
-    orientation : str     — surface orientation for natural conv
-    cap : float           — external h cap (W/m^2 K)
+    t_fluid : float       — ambient temperature (K); with a duct, the bulk
+                            air temperature
+    char_length : float   — characteristic length (m); with a duct, its
+                            hydraulic diameter (4 x area / wetted perimeter)
+    orientation : str     — surface orientation for natural conv; not used
+                            with a duct
+    cap : float           — external h cap (W/m^2 K).  It does not apply to
+                            a duct, whose internal flow is uncapped: a cap
+                            other than H_EXTERNAL_MAX together with a duct
+                            raises ValueError (cap a duct's h with
+                            internal_flow_h(..., cap=...))
+    duct : dict, optional — selects the internal-flow correlations.  Keys:
+                            "wall_condition" (required):
+                            "constant_temperature" or
+                            "constant_heat_flux"; "length" (m, optional):
+                            the heated length, absent or None for fully
+                            developed flow; "correlation" (optional): the
+                            turbulent correlation, "gnielinski" (default)
+                            or "dittus_boelter".  Any other key raises
+                            ValueError.
 
     Returns
     -------
@@ -536,12 +570,24 @@ def estimate_h(
                                   AIR_PROPERTY_RANGE_K, so h rests on
                                   extrapolated (clamped) air properties
 
+    With a duct the same keys come back, with regime "forced",
+    forced_regime the duct's "laminar", "transitional" or "turbulent",
+    h_forced the duct's h, and natural convection not evaluated:
+    h_natural 0.0, natural_regime "n/a", Ri 0.0 and Ra 0.0 (as the
+    no-flow estimate reports the forced side: h_forced 0.0, Re 0.0).
+    One more key, ``duct``, carries internal_flow_h()'s whole result:
+    Nu, Re, Pr, the correlation used and its advisory.
+
     Raises ValueError for a temperature or char_length not > 0, or a
-    negative velocity.
+    negative velocity; with a duct also for a velocity not > 0, a bad
+    duct dict, or a cap other than H_EXTERNAL_MAX.
     """
     require_temperatures(t_surf=t_surf, t_fluid=t_fluid)
     require_non_negative("velocity", velocity, "m/s")
     require_positive("char_length", char_length, "m")
+    if duct is not None:
+        return _estimate_h_duct(velocity, t_surf, t_fluid, char_length,
+                                cap, duct)
     t_film = (t_surf + t_fluid) / 2.0
     nat = natural_convection(
         t_surf, t_fluid, char_length, orientation, cap=999.0,
@@ -634,6 +680,60 @@ def estimate_h(
         "solver_advisory": adv,
         "t_film_K": t_film,
         "film_in_range": film_in_range(t_film),
+    }
+
+
+_DUCT_KEYS = ("wall_condition", "length", "correlation")
+
+
+def _estimate_h_duct(velocity: float, t_surf: float, t_fluid: float,
+                     hydraulic_diameter: float, cap: float,
+                     duct: dict) -> dict:
+    """estimate_h() for the wall of a duct (see its docstring)."""
+    # Imported here: internal_flow imports this module.
+    from thermal_mesh_calculators.internal_flow import internal_flow_h
+
+    if not isinstance(duct, dict):
+        raise TypeError(f"duct must be a dict, got {duct!r}")
+    unknown = sorted(str(k) for k in duct if k not in _DUCT_KEYS)
+    if unknown:
+        raise ValueError(
+            f"duct carries unknown key(s) {', '.join(unknown)}; its keys are "
+            f"{', '.join(_DUCT_KEYS)} (the hydraulic diameter and the mean "
+            f"velocity are estimate_h()'s char_length and velocity)")
+    if "wall_condition" not in duct:
+        raise ValueError(
+            "duct needs a 'wall_condition': 'constant_temperature' or "
+            "'constant_heat_flux'")
+    if cap != H_EXTERNAL_MAX:
+        raise ValueError(
+            f"cap={cap!r} is the external h cap and does not apply to a duct, "
+            f"whose internal flow is uncapped; to cap a duct's h, call "
+            f"internal_flow_h(..., cap=...)")
+
+    inner = internal_flow_h(
+        velocity, hydraulic_diameter, t_surf, t_fluid,
+        duct["wall_condition"],
+        length=duct.get("length"),
+        correlation=duct.get("correlation", "gnielinski"),
+    )
+    adv = solver_advisory(forced_result=inner, regime="forced")
+    return {
+        "h": inner["h"],
+        "h_forced": inner["h_raw"],
+        "h_natural": 0.0,
+        "regime": "forced",
+        "natural_regime": "n/a",
+        "forced_regime": inner["regime"],
+        "Ri": 0.0,
+        "Ra": 0.0,
+        "Re": inner["Re"],
+        "dominant_mode": (f"internal forced convection in a duct "
+                          f"({inner['correlation']}, Re={inner['Re']:.0f})"),
+        "solver_advisory": adv,
+        "t_film_K": inner["t_film_K"],
+        "film_in_range": inner["film_in_range"],
+        "duct": inner,
     }
 
 

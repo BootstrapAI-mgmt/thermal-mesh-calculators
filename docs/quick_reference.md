@@ -30,6 +30,24 @@ result = BoundaryDrivenConductionCalculator.max_mesh_size(
 print(f"Max element size: {result['max_dx_mm']:.2f} mm")
 ```
 
+### 1b. "My mesher needs a wall's through-thickness cell size"
+
+Call `size_for_fea()` with a dict and use the dict it returns (both plain JSON):
+
+```python
+from thermal_mesh_calculators import size_for_fea
+
+sized = size_for_fea({"material": "PA66-GF30", "thickness_mm": 6.0, "h": 150.0,
+                      "t_surf_K": 473.15, "t_fluid_K": 353.15, "t_surr_K": 353.15,
+                      "epsilon": 0.0, "max_dt": 10.0})
+# sized["n_cells"] == 44, sized["binding_constraint"] == "conduction",
+# sized["char_size_mm"] ≈ 0.1364 — the same as size_wall() on that wall
+```
+
+`binding_constraint` says what set the count: `conduction` (the per-cell step),
+`wall_thickness` (one cell spans a thermally thin wall), `max_cells` (capped) or
+`near_equilibrium`. See `docs/integration.md` section 10 for every key.
+
 ### 2. "I need mesh size for a structural part (non-exhaust)"
 
 Same calculator, but T_surf is estimated (±30 K typical).
@@ -184,6 +202,27 @@ h_direct = h_from_velocity(
 **When to use each:**
 - **estimate_h()** — when you have surface temps and zone info (preferred for automation)
 - **h_from_velocity()** — when you have measured/CFD velocity and want quick HTC
+
+**Inside a duct** (a cooling passage or an air duct), the flat-plate correlations
+do not apply.  Give the duct's hydraulic diameter (4 × area / wetted perimeter),
+its mean velocity and the wall condition:
+
+```python
+from thermal_mesh_calculators import estimate_h, internal_flow_h
+
+r = internal_flow_h(velocity=10.0, hydraulic_diameter=0.025, t_surf=350.0,
+                    t_fluid=300.0, wall_condition="constant_temperature")
+# r["h"] ≈ 41.8 W/m²K, r["regime"] == "turbulent", r["correlation"] == "gnielinski"
+
+# The same through estimate_h(): velocity and char_length are the duct's
+same = estimate_h(10.0, 350.0, 300.0, 0.025,
+                  duct={"wall_condition": "constant_temperature"})
+```
+
+Laminar (Re ≤ 2300): Nu = 3.66 (wall at one temperature) or 4.36 (uniform flux),
+Hausen's entry form when a `length` is given; turbulent (Re ≥ 10000): Gnielinski
+(default) or Dittus–Boelter; in between, both are reported, the higher is used
+and `r["advisory"]` says so.  Internal flow is not capped.
 
 ### 8. "I need to process hundreds of parts from a BOM"
 

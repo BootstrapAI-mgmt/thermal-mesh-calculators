@@ -18,7 +18,9 @@ starts at 0.6.2, and `v0.6.2` is its first tag.
 Input validation and a part-intake and result contract: inputs the library
 used to accept without a word now raise a named error or come back with a coded
 warning, and the keys a part, a project and a result may carry are published as
-versioned schemas. Entries marked **(behaviour change)** can alter a result, or
+versioned schemas. Beside them, heat-transfer correlations for flow inside
+ducts, a sizing hook for an external mesher and a solver check of the wall
+sizing rule, none of which changes an existing result. Entries marked **(behaviour change)** can alter a result, or
 raise where 0.6.2 returned one.
 
 ### Added
@@ -146,6 +148,60 @@ raise where 0.6.2 returned one.
   per class, the properties path, fluid regions, names, BOM files, results,
   material records, and how keys are added, renamed and removed across
   releases. Its tables and examples are tested.
+- `internal_flow.py`: the convective coefficient on the wall of a duct carrying
+  air. `internal_flow_h()` bases Re on the hydraulic diameter
+  (`hydraulic_diameter()`, 4 × area / wetted perimeter) and returns `h`,
+  `h_raw`, `Nu`, `Re`, `Pr`, `regime`, `correlation` and an `advisory`: Nu =
+  3.66 (wall at one temperature) or 4.36 (uniform heat flux) for fully
+  developed laminar flow, Hausen's thermal-entry form when a duct length is
+  given, Gnielinski's correlation with the Petukhov friction factor (or
+  Dittus–Boelter on request) from Re = 10 000, and in the band 2300 < Re <
+  10 000 both values reported and the higher used, with an advisory rather
+  than a blend. Air properties come from `air_properties()` at the film
+  temperature, with its fit-range report; internal flow is not capped.
+  `internal_flow_nusselt()` and the correlations themselves
+  (`friction_factor_petukhov()`, `nusselt_gnielinski()`,
+  `nusselt_dittus_boelter()`, `nusselt_hausen()`) are public too. Derivations
+  in `docs/math_derivations.md` §15; a hand-computed benchmark per correlation
+  in `tests/test_internal_flow.py`.
+- `estimate_h()` takes an optional `duct` (`wall_condition`, and optionally
+  `length` and `correlation`): the surface is then the wall of a duct whose
+  mean velocity is `velocity` and whose hydraulic diameter is `char_length`,
+  and h comes from `internal_flow_h()`, whose whole result is returned under
+  `duct`. Without it nothing `estimate_h()` returns changes;
+  `tests/test_examples_regression.py` holds the worked examples' printed
+  output, the batch example's and a grid of `estimate_h()` results to what
+  they were before.
+- `fea_sizing.size_for_fea()`: a sizing hook for an external mesher. It takes a
+  dict — a wall's material (a `MATERIALS` key or an alias, or `k`, `rho` and
+  `cp`), `thickness_mm` and the boundary conditions `h`, `t_surf_K`,
+  `t_fluid_K`, `t_surr_K`, `epsilon` and `max_dt` — and returns a plain-JSON
+  dict: the through-thickness cell size `char_size_mm`, the cell count
+  `n_cells`, the Biot number, the `binding_constraint` (`conduction`,
+  `wall_thickness`, `max_cells` or `near_equilibrium`), a one-line `rationale`,
+  every other quantity `BoundaryDrivenConductionCalculator.size_wall()`
+  reports, and `schema_version`. It is `size_wall()` on that wall:
+  `tests/test_fea_sizing.py` holds every shared quantity equal to 1e-12
+  relative over a grid of 768 plates. A quantity `size_wall()` reports as
+  infinite is `None`, since JSON has none.
+- `FEA_SIZING_REQUEST_SCHEMA`, `FEA_SIZING_RESULT_SCHEMA`,
+  `FEA_SIZING_SCHEMA_VERSION` (1), `validate_fea_sizing_request()` and
+  `validate_fea_sizing()` in `schema.py`. A request the schema refuses raises
+  `PartInputError` with every problem; `docs/integration.md` section 10
+  documents the call, and its two key tables are held to the schemas.
+- `analysis/mesh_convergence_1d_wall.py`: a check of the wall sizing rule
+  against CalculiX. A 10 mm steel-like wall, its faces held at 800 °C and
+  100 °C, with a conductivity falling linearly from 50 to 30 W/m K (with a
+  constant one the profile is a straight line that any mesh reproduces, and
+  no mesh could fail), is meshed at the rule's cell count (46, through
+  `size_for_fea()`) and at two refinements, solved by `ccx`, and compared with
+  the exact (Kirchhoff-transform) profile: 0.0058 %, 0.0015 % and 0.00039 % of
+  the 700 K drop, order 1.96 and 1.93, against a 2 % band; a planted coarse
+  mesh of one cell misses it at 5.76 % and the check fails it by name. Derived
+  in `docs/math_derivations.md` §16. `tests/test_mesh_convergence_1d_wall.py`
+  tests the exact answer, the deck and the comparison everywhere, and runs
+  the solver where `ccx` is on PATH (its three solver tests skip by name
+  elsewhere, as in CI).
 
 ### Changed
 - **(behaviour change)** An unknown `component_class` raises. 0.6.2 sized it

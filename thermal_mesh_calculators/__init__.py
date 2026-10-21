@@ -13,11 +13,15 @@ Modules:
     transient   - Penetration depth, Fourier number, and drive-cycle constraints
     zones       - Convection zone lookup and spatial gradient estimation
     h_estimator - Convective HTC from correlations (forced, natural, mixed)
+    internal_flow - Convective HTC inside ducts (laminar, Hausen entry,
+                  Gnielinski, Dittus-Boelter, hydraulic diameter)
     boundary_layer - Aerodynamic boundary layer mesh constraints
     batch       - Bulk component processing (BOM → mesh sizes)
     schema      - Versioned input and result schemas, with validators
     intake      - BOM files (CSV, JSON), material and zone aliases,
                   component class inference
+    fea_sizing  - A sizing hook for an external mesher: a wall's
+                  through-thickness cell size, dict in and dict out
 """
 
 from thermal_mesh_calculators.conduction import BoundaryDrivenConductionCalculator
@@ -52,6 +56,11 @@ from thermal_mesh_calculators.schema import (
     validate_project_input,
     validate_material_record,
     validate_result,
+    FEA_SIZING_SCHEMA_VERSION,
+    FEA_SIZING_REQUEST_SCHEMA,
+    FEA_SIZING_RESULT_SCHEMA,
+    validate_fea_sizing_request,
+    validate_fea_sizing,
 )
 from thermal_mesh_calculators.intake import (
     load_bom,
@@ -80,5 +89,17 @@ from thermal_mesh_calculators.h_estimator import (
     H_EXTERNAL_MAX,
     H_EXTERNAL_TYPICAL,
 )
+from thermal_mesh_calculators.internal_flow import (
+    internal_flow_h,
+    internal_flow_nusselt,
+    hydraulic_diameter,
+    friction_factor_petukhov,
+    nusselt_gnielinski,
+    nusselt_dittus_boelter,
+    nusselt_hausen,
+    NU_LAMINAR_CONSTANT_TEMPERATURE,
+    NU_LAMINAR_CONSTANT_HEAT_FLUX,
+)
+from thermal_mesh_calculators.fea_sizing import size_for_fea
 
 __version__ = "0.6.2"
