@@ -1621,9 +1621,151 @@ computed (reported as "n/a").
 
 ---
 
+## 15. Internal-Flow Heat Transfer in Ducts
+
+### 15.1 Why the Flat-Plate Correlations Do Not Apply
+
+The forced-convection correlations of the `h_estimator` module describe a
+boundary layer that starts at a leading edge and grows freely over an open
+surface, so h falls with distance along the plate.  Inside a duct (a cooling
+passage, an air duct, a pipe) the boundary layers from opposite walls meet a
+short way downstream of the inlet.  From there on the velocity and
+temperature profiles keep their shape, and h settles to a value set by the
+duct's size rather than by a distance from an edge.  Before this section the
+package only lifted the external cap for an internal zone (`zones.py`'s
+`is_internal`); the `internal_flow` module computes a duct's h.
+
+### 15.2 Hydraulic Diameter and Reynolds Number
+
+A section of any shape is described by its hydraulic diameter, four times
+the flow area over the wetted perimeter:
+
+```
+D_h = 4 · A / P
+circle of diameter d:   D_h = d
+rectangle a × b:        D_h = 2ab / (a + b)
+```
+
+Re and Nu are both based on it and on the mean velocity V of the flow:
+
+```
+Re = V · D_h / ν,    h = Nu · k_air / D_h
+```
+
+The flow is laminar up to Re = 2300 and fully turbulent from Re = 10 000;
+between the two it is transitional (§15.5).
+
+### 15.3 Laminar Flow
+
+**Fully developed.**  Once both profiles have developed in a circular tube,
+the Nusselt number is a constant that depends only on the thermal condition
+at the wall:
+
+```
+Nu = 3.66   wall at one temperature
+Nu = 4.36   uniform wall heat flux
+```
+
+Neither depends on Re or Pr.  For a non-circular section of the same D_h
+the fully developed laminar Nu depends on the shape of the section, so these
+are the circular-tube values.
+
+**Thermal entry (Hausen).**  Near the inlet the temperature profile is still
+developing, the wall gradient is steeper and h is higher.  For the wall at
+one temperature, the package uses Hausen's correlation for the mean Nusselt
+number over a heated length L:
+
+```
+Gz = Re · Pr · D_h / L                     (Graetz number)
+Nu = 3.66 + 0.0668 · Gz / (1 + 0.04 · Gz^(2/3))
+```
+
+It tends to 3.66 as L grows (Gz → 0) and rises toward the inlet.  Its
+validity: laminar flow (Re ≤ 2300), the wall at one temperature, and a
+velocity profile that is already developed while the temperature profile
+develops (the thermal entry problem).  With air (Pr ≈ 0.7) the velocity
+develops alongside the temperature, which raises the true mean Nu near the
+inlet above Hausen's value; the result says so.  For a uniform wall heat flux
+the package does not model the entry and keeps 4.36, which the mean over any
+finite length exceeds, and says that too.
+
+### 15.4 Turbulent Flow
+
+**Gnielinski, with the Petukhov friction factor (the default).**
+
+```
+f  = (0.790 · ln Re − 1.64)^(−2)                       (smooth tube, Darcy)
+Nu = (f/8) · (Re − 1000) · Pr / (1 + 12.7 · (f/8)^(1/2) · (Pr^(2/3) − 1))
+```
+
+stated for 3000 ≤ Re ≤ 5 × 10⁶ and 0.5 ≤ Pr ≤ 2000.  It covers the lower
+turbulent range better than the power-law form below, which is why it is the
+default.
+
+**Dittus–Boelter (the simpler alternative).**
+
+```
+Nu = 0.023 · Re^0.8 · Pr^n,   n = 0.4 heating the fluid (wall hotter),
+                              n = 0.3 cooling it
+```
+
+stated for Re ≥ 10 000, 0.6 ≤ Pr ≤ 160 and L/D_h ≥ 10.
+
+Both are fully developed correlations: in a duct shorter than about ten
+hydraulic diameters the entrance raises the mean h, and the result names the
+short duct rather than correcting for it.
+
+### 15.5 The Transition Band, 2300 < Re < 10 000
+
+Here the flow may be laminar, intermittent or turbulent, depending on the
+inlet and on disturbances, and no correlation predicts which.  The package
+does not blend the two limits.  It evaluates the laminar value (§15.3) and
+the chosen turbulent correlation at the actual Re, reports both
+(`Nu_laminar`, `Nu_turbulent`), uses the higher, and says so in the
+advisory.  The higher value is the safe side for mesh sizing: a higher h
+means a larger boundary flux and, through §1, a smaller element.  Below
+Re = 3000 Gnielinski's correlation is outside its stated range, and
+Dittus–Boelter's is outside its range anywhere in the band; the advisory
+names that too.
+
+### 15.6 Air Properties and the Cap
+
+The air properties come from `air_properties()` (§8.2) at the film
+temperature between the wall and the bulk (mean) air temperature,
+
+```
+T_film = (T_wall + T_bulk) / 2
+```
+
+the same evaluation the external correlations use, so the 250–700 K fit range
+and its out-of-range report carry over.  The external cap (100 W/m²·K) does
+not apply: the package treats every internal flow as uncapped.
+
+### 15.7 Implementation
+
+`internal_flow.internal_flow_h(velocity, hydraulic_diameter, t_surf, t_fluid,
+wall_condition, length=None, correlation="gnielinski")` returns `h`, `h_raw`,
+`Nu`, `Re`, `Pr`, `regime`, `correlation` and `advisory` (with the inputs and
+the film temperature).  `estimate_h()` reaches it only through its `duct`
+argument; without one, nothing it returns changes.
+
+### 15.8 Worked Values
+
+The test suite's benchmark, at the stated Re and Pr (Pr = 0.71):
+
+```
+Hausen, Re = 1000, L/D_h = 20:  Gz = 35.5,  Nu = 5.3159
+Petukhov f, Re = 20 000:        f = 0.026151
+Gnielinski, Re = 20 000:        Nu = 51.772
+Dittus–Boelter, Re = 20 000:    Nu = 55.342 (heating), 57.270 (cooling)
+Transition, Re = 5000:          laminar 3.66, Gnielinski 16.722 → 16.722 used
+```
+
+---
+
 ## Summary of Key Design Equations (Updated)
 
-All constraints from Sections 1–14:
+All constraints from Sections 1–15:
 
 **Conduction (boundary-driven):**
 ```
@@ -1707,6 +1849,17 @@ Mixed/unknown:    dx ≤ C_BL · δ                            [isotropic tets t
 ```
 ER_v = (dx_surface / y_last)³
 ER_v ≤ 5: stable;  5 < ER_v ≤ 10: marginal;  ER_v > 10: unstable
+```
+
+**Internal flow in a duct (§15):**
+```
+D_h = 4A/P;  Re = V·D_h/ν;  h = Nu·k_air/D_h
+Laminar (Re ≤ 2300):  Nu = 3.66 (wall at one T), 4.36 (uniform flux)
+  thermal entry:      Nu = 3.66 + 0.0668·Gz / (1 + 0.04·Gz^(2/3)),  Gz = Re·Pr·D_h/L
+Turbulent (Re ≥ 10⁴): Nu = (f/8)(Re − 1000)Pr / (1 + 12.7(f/8)^½(Pr^⅔ − 1)),
+                      f = (0.790 ln Re − 1.64)^(−2)            [Gnielinski]
+                      Nu = 0.023·Re^0.8·Pr^n, n = 0.4 / 0.3    [Dittus–Boelter]
+2300 < Re < 10⁴: both evaluated, the higher used, an advisory given
 ```
 
 ---

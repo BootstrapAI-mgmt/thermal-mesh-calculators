@@ -47,6 +47,9 @@ All terms on the right are either known inputs (material props, BCs) or can be e
 `zones.py` (convection zone lookup with velocity / orientation / air-temp metadata) ·
 `h_estimator.py` (HTC from correlations — forced, natural and mixed convection,
 Richardson-number regime classification, steady-state solver advisory) ·
+`internal_flow.py` (HTC inside ducts — fully developed laminar, Hausen's thermal
+entry, Gnielinski with the Petukhov friction factor, Dittus–Boelter, the
+hydraulic diameter; reached from `estimate_h()` only through its `duct` argument) ·
 `boundary_layer.py` (aerodynamic boundary layer: y+, inflation layers, surface dx) ·
 `batch.py` (BOM → mesh sizes, with 43 materials and 30 surface treatments inline) ·
 `schema.py` (versioned input and result schemas, and validators for them) ·

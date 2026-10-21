@@ -13,6 +13,8 @@ Modules:
     transient   - Penetration depth, Fourier number, and drive-cycle constraints
     zones       - Convection zone lookup and spatial gradient estimation
     h_estimator - Convective HTC from correlations (forced, natural, mixed)
+    internal_flow - Convective HTC inside ducts (laminar, Hausen entry,
+                  Gnielinski, Dittus-Boelter, hydraulic diameter)
     boundary_layer - Aerodynamic boundary layer mesh constraints
     batch       - Bulk component processing (BOM → mesh sizes)
     schema      - Versioned input and result schemas, with validators
@@ -79,6 +81,17 @@ from thermal_mesh_calculators.h_estimator import (
     h_from_velocity,
     H_EXTERNAL_MAX,
     H_EXTERNAL_TYPICAL,
+)
+from thermal_mesh_calculators.internal_flow import (
+    internal_flow_h,
+    internal_flow_nusselt,
+    hydraulic_diameter,
+    friction_factor_petukhov,
+    nusselt_gnielinski,
+    nusselt_dittus_boelter,
+    nusselt_hausen,
+    NU_LAMINAR_CONSTANT_TEMPERATURE,
+    NU_LAMINAR_CONSTANT_HEAT_FLUX,
 )
 
 __version__ = "0.6.2"

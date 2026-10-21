@@ -18,8 +18,9 @@ starts at 0.6.2, and `v0.6.2` is its first tag.
 Input validation and a part-intake and result contract: inputs the library
 used to accept without a word now raise a named error or come back with a coded
 warning, and the keys a part, a project and a result may carry are published as
-versioned schemas. Entries marked **(behaviour change)** can alter a result, or
-raise where 0.6.2 returned one.
+versioned schemas. Beside them, heat-transfer correlations for flow inside
+ducts, which no existing result uses. Entries marked **(behaviour change)** can
+alter a result, or raise where 0.6.2 returned one.
 
 ### Added
 - `PartInputError`, exported from the package. `process_part()` raises it
@@ -146,6 +147,30 @@ raise where 0.6.2 returned one.
   per class, the properties path, fluid regions, names, BOM files, results,
   material records, and how keys are added, renamed and removed across
   releases. Its tables and examples are tested.
+- `internal_flow.py`: the convective coefficient on the wall of a duct carrying
+  air. `internal_flow_h()` bases Re on the hydraulic diameter
+  (`hydraulic_diameter()`, 4 × area / wetted perimeter) and returns `h`,
+  `h_raw`, `Nu`, `Re`, `Pr`, `regime`, `correlation` and an `advisory`: Nu =
+  3.66 (wall at one temperature) or 4.36 (uniform heat flux) for fully
+  developed laminar flow, Hausen's thermal-entry form when a duct length is
+  given, Gnielinski's correlation with the Petukhov friction factor (or
+  Dittus–Boelter on request) from Re = 10 000, and in the band 2300 < Re <
+  10 000 both values reported and the higher used, with an advisory rather
+  than a blend. Air properties come from `air_properties()` at the film
+  temperature, with its fit-range report; internal flow is not capped.
+  `internal_flow_nusselt()` and the correlations themselves
+  (`friction_factor_petukhov()`, `nusselt_gnielinski()`,
+  `nusselt_dittus_boelter()`, `nusselt_hausen()`) are public too. Derivations
+  in `docs/math_derivations.md` §15; a hand-computed benchmark per correlation
+  in `tests/test_internal_flow.py`.
+- `estimate_h()` takes an optional `duct` (`wall_condition`, and optionally
+  `length` and `correlation`): the surface is then the wall of a duct whose
+  mean velocity is `velocity` and whose hydraulic diameter is `char_length`,
+  and h comes from `internal_flow_h()`, whose whole result is returned under
+  `duct`. Without it nothing `estimate_h()` returns changes;
+  `tests/test_examples_regression.py` holds the worked examples' printed
+  output, the batch example's and a grid of `estimate_h()` results to what
+  they were before.
 
 ### Changed
 - **(behaviour change)** An unknown `component_class` raises. 0.6.2 sized it

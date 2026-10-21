@@ -14,10 +14,11 @@ A pure Python package for mesh sizing and thermal analysis of heat shields and c
 6. [transient](#transient)
 7. [zones](#zones)
 8. [h_estimator](#h_estimator)
-9. [batch](#batch)
-10. [schema](#schema)
-11. [intake](#intake)
-12. [Quick Start Examples](#quick-start-examples)
+9. [internal_flow](#internal_flow)
+10. [batch](#batch)
+11. [schema](#schema)
+12. [intake](#intake)
+13. [Quick Start Examples](#quick-start-examples)
 
 ---
 
@@ -1138,7 +1139,7 @@ Comprehensive h estimation considering both forced and natural convection.
 ```python
 def estimate_h(
     velocity, t_surf, t_fluid, char_length,
-    orientation="vertical", cap=H_EXTERNAL_MAX
+    orientation="vertical", cap=H_EXTERNAL_MAX, duct=None
 ) -> dict
 ```
 
@@ -1148,7 +1149,15 @@ def estimate_h(
 - `t_fluid` (float): Fluid temperature (K)
 - `char_length` (float): Characteristic length (m)
 - `orientation` (str, default="vertical"): Surface orientation
-- `cap` (float, default=100.0): Maximum h cap (W/m²·K)
+- `cap` (float, default=100.0): Maximum h cap (W/m²·K); external flow only
+- `duct` (dict, optional): The surface is the wall of a duct: h comes from the
+  internal-flow correlations ([internal_flow](#internal_flow)), `velocity` is the
+  duct's mean velocity and `char_length` its hydraulic diameter.  Keys:
+  `"wall_condition"` (required: `"constant_temperature"` or `"constant_heat_flux"`),
+  `"length"` (m, optional; absent or `None` for fully developed flow) and
+  `"correlation"` (optional: `"gnielinski"`, the default, or `"dittus_boelter"`).
+  Another key, or a `cap` other than the default, raises `ValueError`.  Without
+  `duct` nothing about the estimate changes.
 
 **Returns:**
 - `dict` with keys:
@@ -1165,6 +1174,11 @@ def estimate_h(
   - `solver_advisory` (dict): Solver recommendations
   - `t_film_K` (float): Film temperature (K)
   - `film_in_range` (bool): False when the air properties behind h were extrapolated
+  - With a duct: the same keys, with `regime` `"forced"`, `forced_regime` the
+    duct's `"laminar"`, `"transitional"` or `"turbulent"` (a transitional duct
+    gets a `"caution"` solver advisory), natural convection not evaluated
+    (`h_natural`, `Ri` and `Ra` are 0.0, `natural_regime` is `"n/a"`), and one
+    more key, `duct`: `internal_flow_h()`'s whole result
 
 **Example:**
 ```python
@@ -1259,6 +1273,93 @@ result = h_from_velocity(
 
 print(f"h at 60 mph: {result['h']:.0f} W/m²·K")
 ```
+
+---
+
+## internal_flow
+
+Convective h on the wall of a duct carrying air, from the internal-flow
+correlations (derivations: `docs/math_derivations.md` §15).
+
+### Module Constants
+
+- `LAMINAR_REYNOLDS_MAX = 2300.0`, `TURBULENT_REYNOLDS_MIN = 10000.0` — the
+  regime boundaries (Re based on the hydraulic diameter)
+- `NU_LAMINAR_CONSTANT_TEMPERATURE = 3.66`, `NU_LAMINAR_CONSTANT_HEAT_FLUX = 4.36`
+  — fully developed laminar flow in a circular tube
+- `WALL_CONDITIONS = ("constant_temperature", "constant_heat_flux")`
+- `TURBULENT_CORRELATIONS = ("gnielinski", "dittus_boelter")`
+- `GNIELINSKI_REYNOLDS_RANGE = (3000.0, 5.0e6)`, `DITTUS_BOELTER_REYNOLDS_MIN = 10000.0`
+- `FULLY_DEVELOPED_LENGTH_DIAMETERS = 10.0` — a turbulent duct shorter than
+  this many hydraulic diameters is named in the advisory
+
+### internal_flow_h()
+
+**Signature:**
+```python
+def internal_flow_h(
+    velocity, hydraulic_diameter, t_surf, t_fluid, wall_condition,
+    length=None, correlation="gnielinski", cap=None
+) -> dict
+```
+
+**Parameters:**
+- `velocity` (float): Mean velocity of the air in the duct (m/s), > 0
+- `hydraulic_diameter` (float): 4 × flow area / wetted perimeter (m)
+- `t_surf` (float): Wall temperature (K)
+- `t_fluid` (float): Bulk (mean) air temperature (K)
+- `wall_condition` (str): `"constant_temperature"` or `"constant_heat_flux"`
+- `length` (float, optional): Heated length (m); `None` means fully developed flow
+- `correlation` (str, default `"gnielinski"`): The turbulent correlation,
+  `"gnielinski"` (with the Petukhov friction factor) or `"dittus_boelter"`
+- `cap` (float, optional): A ceiling on h; `None` leaves internal flow uncapped
+
+**Returns:** `dict` with keys
+- `h`, `h_raw` (float): The coefficient (W/m²·K); `h` equals `h_raw` unless `cap` is given
+- `Nu`, `Re`, `Pr` (float)
+- `regime` (str): `"laminar"` (Re ≤ 2300), `"transitional"` or `"turbulent"` (Re ≥ 10000)
+- `correlation` (str): `"laminar_fully_developed"`, `"hausen"`, `"gnielinski"`
+  or `"dittus_boelter"` — the one whose value `Nu` is
+- `Nu_laminar`, `Nu_turbulent` (float or None): Both values in the transition
+  band, where the higher is used (no blend)
+- `friction_factor` (float or None): The Petukhov f when Gnielinski's correlation ran
+- `advisory` (str): What to know about the value (the transition band, a
+  correlation outside its stated range, a short duct, a film temperature outside
+  the air-property fits); `""` when there is nothing to say
+- `wall_condition`, `hydraulic_diameter_m`, `length_m`, `velocity_ms` — the inputs
+- `t_film_K` (float), `film_in_range` (bool): As for `estimate_h()`
+
+Raises `ValueError` for a velocity, diameter, length, cap or temperature not > 0,
+or an unknown `wall_condition` or `correlation`.
+
+**Example:**
+```python
+from thermal_mesh_calculators import internal_flow_h, hydraulic_diameter
+
+dh = hydraulic_diameter(area=0.040 * 0.020, wetted_perimeter=0.12)  # 26.7 mm
+r = internal_flow_h(velocity=10.0, hydraulic_diameter=dh, t_surf=350.0,
+                    t_fluid=300.0, wall_condition="constant_temperature",
+                    length=0.6)
+print(f"h = {r['h']:.1f} W/m2K ({r['regime']}, {r['correlation']}, Re = {r['Re']:.0f})")
+```
+
+### internal_flow_nusselt()
+
+The same choice of regime, correlation and advisory at a given Re and Pr,
+without air properties: `internal_flow_nusselt(reynolds, prandtl,
+wall_condition, length_over_diameter=None, correlation="gnielinski",
+heating=True)` returns `Nu`, `regime`, `correlation`, `Nu_laminar`,
+`Nu_turbulent`, `friction_factor` and `advisory`.
+
+### The correlations
+
+- `hydraulic_diameter(area, wetted_perimeter)` → `4 * area / wetted_perimeter` (m)
+- `friction_factor_petukhov(reynolds)` → `(0.790 ln Re − 1.64)^-2`
+- `nusselt_gnielinski(reynolds, prandtl)` → Gnielinski's Nu with the Petukhov f
+- `nusselt_dittus_boelter(reynolds, prandtl, heating=True)` → `0.023 Re^0.8 Pr^n`,
+  n = 0.4 heating, 0.3 cooling
+- `nusselt_hausen(reynolds, prandtl, length_over_diameter)` → Hausen's mean Nu
+  over a heated length, wall at one temperature
 
 ---
 

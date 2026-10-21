@@ -25,6 +25,7 @@ thermal_mesh_calculators/       # Python package (pure stdlib, no dependencies)
     transient.py                # TransientMeshCalculator (penetration depth, Fourier, drive-cycle)
     zones.py                    # Convection zone lookup with velocity/orientation/t_air metadata
     h_estimator.py              # Convective HTC from correlations (forced, natural, mixed, Richardson)
+    internal_flow.py            # Convective HTC inside ducts (laminar, Hausen entry, Gnielinski, Dittus-Boelter, hydraulic diameter)
     boundary_layer.py           # BoundaryLayerCalculator (aero BL mesh: y+, inflation, surface dx)
     batch.py                    # BOM → mesh sizes (43 materials, 30 surface treatments, solver advisory); process_part_from_props, fluid regions
     schema.py                   # Versioned input and result schemas, warning codes, stdlib validators
@@ -56,8 +57,11 @@ tests/
     test_names.py               # 55 tests — material and zone aliases, component class inference
     test_from_props.py          # 111 tests — sizing from explicit properties (all 43 materials), fluid regions, service limits
     test_result_schema.py       # 28 tests — the result schema, the warning registry, the docs' key tables and examples, stdlib-only imports
+    test_internal_flow.py       # 34 tests — duct h: the hand-computed benchmark per correlation, the transition band, advisories, estimate_h(duct=...)
+    test_examples_regression.py # 3 tests — the worked examples and estimate_h() held to the outputs captured before the duct path
+    golden_outputs.py           # those captured outputs (data, not tests)
     conftest.py                 # checks every result the suite produces against the result schema
-                                # 790 tests total
+                                # 827 tests total
 ```
 
 ### Design Decisions
@@ -118,6 +122,7 @@ The `h_estimator` module computes h from first principles rather than static loo
 - **Mixed convection (assisting)**: Asymptotic blending h_mixed = (h_forced³ + h_natural³)^(1/3)
 - **Mixed convection (opposing, v0.4)**: h_mixed = max(|h_f³ − h_n³|^(1/3), k_air/L) — for horizontal_down with forced flow
 - **External h cap**: 100 W/m²K absolute (H_EXTERNAL_MAX), 60 typical at 10 mph (H_EXTERNAL_TYPICAL); internal flows uncapped
+- **Internal flow in ducts (unreleased)**: `internal_flow.py` — Re on the hydraulic diameter 4A/P; laminar Nu 3.66 / 4.36 (Hausen's thermal entry with a length), Gnielinski with the Petukhov f (default) or Dittus–Boelter above Re 10 000, and in 2300 < Re < 10 000 both values reported, the higher used, with an advisory; reached from `estimate_h()` only through its `duct` argument
 
 ### Solver Advisory System (v0.3)
 
@@ -168,7 +173,7 @@ Emissivity fallback logic: non-metals → 0.90, aluminium → 0.30, other metals
 - [x] Automatic batch warnings from parametric study thresholds (v0.3)
 - [x] Parametric regime crossover studies (analysis/ directory)
 - [x] 11 worked automotive examples with verified output
-- [x] 740 pytest unit tests with analytical verification and energy balance closure
+- [x] 777 pytest unit tests with analytical verification and energy balance closure
 - [x] Inputs checked (unreleased; CHANGELOG `[Unreleased]`): unknown part names raise `PartInputError` naming the allowed set, physical inputs are range-guarded, and defaulted or extrapolated inputs, shield non-convergence and transient conflicts come back as coded warnings
 - [x] Part intake and result contract (unreleased; CHANGELOG `[Unreleased]`): versioned input and result schemas with standard-library validators (`schema.py`), every key checked before sizing and unknown keys refused, `load_bom()` for CSV and JSON reporting every problem of every row, `process_part_from_props()`, a `fluid` class sized by its boundary layer, material and zone aliases, `infer_component_class()`, optional `t_service_max_K` and `source` fields on material records (no values filled in), and `docs/integration.md`
 - [x] Full mathematical derivation documentation (docs/math_derivations.md, Sections 1–14)
@@ -270,7 +275,7 @@ CI runs all four on every push and pull request (ruff and mypy at pinned version
 and also installs the package with `pip install .` and imports it from outside the
 checkout.
 
-790 tests across 19 test files (740 physics, input-validation and contract + 18 for the open/closed map checker + 32 for the release statements and the documented test counts).
+827 tests across 21 test files (777 physics, input-validation and contract + 18 for the open/closed map checker + 32 for the release statements and the documented test counts).
 Test strategy:
 - Hand-computed analytical solutions for known inputs
 - Edge cases (zero flux, zero emissivity, pure convection/radiation)

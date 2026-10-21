@@ -185,6 +185,27 @@ h_direct = h_from_velocity(
 - **estimate_h()** — when you have surface temps and zone info (preferred for automation)
 - **h_from_velocity()** — when you have measured/CFD velocity and want quick HTC
 
+**Inside a duct** (a cooling passage or an air duct), the flat-plate correlations
+do not apply.  Give the duct's hydraulic diameter (4 × area / wetted perimeter),
+its mean velocity and the wall condition:
+
+```python
+from thermal_mesh_calculators import estimate_h, internal_flow_h
+
+r = internal_flow_h(velocity=10.0, hydraulic_diameter=0.025, t_surf=350.0,
+                    t_fluid=300.0, wall_condition="constant_temperature")
+# r["h"] ≈ 41.8 W/m²K, r["regime"] == "turbulent", r["correlation"] == "gnielinski"
+
+# The same through estimate_h(): velocity and char_length are the duct's
+same = estimate_h(10.0, 350.0, 300.0, 0.025,
+                  duct={"wall_condition": "constant_temperature"})
+```
+
+Laminar (Re ≤ 2300): Nu = 3.66 (wall at one temperature) or 4.36 (uniform flux),
+Hausen's entry form when a `length` is given; turbulent (Re ≥ 10000): Gnielinski
+(default) or Dittus–Boelter; in between, both are reported, the higher is used
+and `r["advisory"]` says so.  Internal flow is not capped.
+
 ### 8. "I need to process hundreds of parts from a BOM"
 
 Use `process_batch()` with a list of part dicts, or read them from a CSV or
