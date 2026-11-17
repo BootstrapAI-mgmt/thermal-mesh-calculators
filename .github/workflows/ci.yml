@@ -59,7 +59,9 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: ubuntu-latest
+          # ubuntu-latest now resolves to an image for which setup-python has no Python 3.9 build;
+          # this cell runs on ubuntu-24.04.
+          - os: ubuntu-24.04
             python-version: '3.9'
           - os: ubuntu-latest
             python-version: '3.13'
